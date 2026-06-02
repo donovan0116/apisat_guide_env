@@ -12,12 +12,14 @@ setup(
         "gymnasium>=0.29.0",
     ],
     extras_require={
-        "viz": ["matplotlib>=3.7.0"],
+        "viz": ["matplotlib>=3.7.0", "imageio>=2.20.0", "imageio-ffmpeg>=0.4.0"],
         "rl": ["stable-baselines3>=2.1.0", "torch>=2.0.0"],
         "marl": ["ray[rllib]>=2.0.0"],
         "dev": ["pytest>=7.0.0"],
         "all": [
             "matplotlib>=3.7.0",
+            "imageio>=2.20.0",
+            "imageio-ffmpeg>=0.4.0",
             "stable-baselines3>=2.1.0",
             "torch>=2.0.0",
             "pytest>=7.0.0",

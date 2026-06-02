@@ -3,6 +3,10 @@ Evaluation and visualization script.
 
 Usage:
     python scripts/eval.py --model_path models/ppo_final.zip --render
+    python scripts/eval.py --render --render_mode human
+    python scripts/eval.py --record --record_path logs/eval.mp4 --num_episodes 3
+    python scripts/eval.py --record --record_path logs/eval.gif
+    python scripts/eval.py --top_down
 """
 
 import argparse
@@ -17,18 +21,30 @@ from utils.config import FullConfig
 from envs import QuadrotorDeliveryEnv
 
 
-def run_episode(env, model=None, render: bool = False, max_steps: int = 500):
+def _make_policy_fn(model):
+    """Wrap a stable-baselines3 model as ``policy(obs) -> action``."""
+    if model is None:
+        return None
+
+    def _policy(obs):
+        action, _ = model.predict(obs, deterministic=True)
+        return np.asarray(action, dtype=np.float32)
+
+    return _policy
+
+
+def run_episode(env, model=None, render: bool = False, render_mode: str = "human",
+                max_steps: int = 500, top_down: bool = False):
     """Run a single episode and return metrics."""
     obs, info = env.reset()
     total_reward = np.zeros(env.num_drones)
-    done = False
     step = 0
 
-    while not done and step < max_steps:
+    while step < max_steps:
         if model is not None:
             action, _ = model.predict(obs, deterministic=True)
+            action = np.asarray(action, dtype=np.float32)
         else:
-            # Random policy for testing
             action = env.action_space.sample()
 
         obs, reward, terminated, truncated, info = env.step(action)
@@ -36,9 +52,17 @@ def run_episode(env, model=None, render: bool = False, max_steps: int = 500):
         step += 1
 
         if render:
-            env.render()
+            if top_down:
+                env_top = env
+                from utils.topdown import render_top_down
+                frame = render_top_down(env_top)
+                if frame is not None:
+                    pass  # headless; nothing to display
+            else:
+                env.render()
 
-        done = np.any(terminated) or np.any(truncated) or step >= max_steps
+        if bool(np.any(terminated)) or bool(np.any(truncated)):
+            break
 
     return {
         "total_reward": total_reward,
@@ -52,7 +76,22 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate trained agents")
     parser.add_argument("--model_path", type=str, default=None,
                         help="Path to trained model (optional)")
-    parser.add_argument("--render", action="store_true", help="Enable rendering")
+    parser.add_argument("--render", action="store_true",
+                        help="Render the environment in real time")
+    parser.add_argument("--render_mode", type=str, default="human",
+                        choices=["human", "rgb_array", "rgb_array_list",
+                                 "video", "top_down"],
+                        help="Gymnasium-style render mode")
+    parser.add_argument("--record", action="store_true",
+                        help="Record each episode to a video file")
+    parser.add_argument("--record_path", type=str, default="logs/eval.mp4",
+                        help="Output video path (extension determines format)")
+    parser.add_argument("--record_fps", type=int, default=30,
+                        help="Recording FPS")
+    parser.add_argument("--speed", type=float, default=1.0,
+                        help="Playback speed multiplier for live rendering")
+    parser.add_argument("--top_down", action="store_true",
+                        help="Use the 2D top-down view (overrides --render_mode)")
     parser.add_argument("--num_episodes", type=int, default=5)
     parser.add_argument("--num_drones", type=int, default=4)
     parser.add_argument("--num_targets", type=int, default=4)
@@ -70,6 +109,16 @@ def main():
     config.env.task_mode = args.task_mode
     config.term.max_steps = args.max_steps
 
+    # Choose render mode
+    if args.record:
+        render_mode = "rgb_array"
+    elif args.top_down:
+        render_mode = "top_down"
+    elif args.render:
+        render_mode = args.render_mode
+    else:
+        render_mode = None
+
     env = QuadrotorDeliveryEnv(
         num_drones=config.env.num_drones,
         num_targets=config.env.num_targets,
@@ -81,7 +130,7 @@ def main():
         act_config=config.act,
         reward_config=config.reward,
         term_config=config.term,
-        render_mode="human" if args.render else None,
+        render_mode=render_mode,
         seed=args.seed,
     )
 
@@ -100,15 +149,39 @@ def main():
     all_successes = []
 
     for ep in range(args.num_episodes):
-        result = run_episode(env, model, render=args.render,
-                             max_steps=args.max_steps)
-        all_rewards.append(result["total_reward"])
-        all_successes.append(result["targets_reached"] / result["total_targets"])
+        if args.record:
+            # Recording path: run a clean episode using the high-level API
+            from utils.visualization import record_episode
+            t0 = time.time()
+            policy = _make_policy_fn(model)
+            path = record_episode(
+                env, args.record_path,
+                fps=args.record_fps,
+                max_steps=args.max_steps,
+                policy=policy,
+            )
+            # Compute metrics from the recorded env state
+            metrics = run_episode(env, model, render=False, max_steps=args.max_steps)
+            elapsed = time.time() - t0
+            print(f"[record] wrote {path} in {elapsed:.1f}s")
+        else:
+            metrics = run_episode(
+                env, model,
+                render=args.render or args.top_down,
+                render_mode=render_mode or "human",
+                max_steps=args.max_steps,
+                top_down=args.top_down,
+            )
+
+        all_rewards.append(metrics["total_reward"])
+        all_successes.append(
+            metrics["targets_reached"] / max(metrics["total_targets"], 1)
+        )
 
         print(f"Episode {ep + 1}/{args.num_episodes}: "
-              f"steps={result['steps']}, "
-              f"rewards={np.sum(result['total_reward']):.1f}, "
-              f"targets={result['targets_reached']}/{result['total_targets']}")
+              f"steps={metrics['steps']}, "
+              f"rewards={np.sum(metrics['total_reward']):.1f}, "
+              f"targets={metrics['targets_reached']}/{metrics['total_targets']}")
 
     print(f"\nAverage reward: {np.mean([np.sum(r) for r in all_rewards]):.1f} "
           f"± {np.std([np.sum(r) for r in all_rewards]):.1f}")

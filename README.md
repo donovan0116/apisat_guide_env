@@ -10,7 +10,7 @@ A Gymnasium-compatible multi-agent reinforcement learning environment for quadro
 - **Task Assignment**: Drones cooperatively assign to targets (reach or pickup+delivery modes)
 - **CTDE Ready**: Local observations per agent + global observation for centralized critic
 - **Configurable Reward**: Target completion, distance shaping, collision penalties, energy cost
-- **Visualization**: Matplotlib 3D rendering
+- **Animated Visualization**: Matplotlib 3D rendering with trails, attitude indicators, 2D top-down inset, HUD overlay, and event flashes. Records to mp4/gif.
 
 ## Project Structure
 
@@ -46,8 +46,9 @@ A Gymnasium-compatible multi-agent reinforcement learning environment for quadro
 
 ```bash
 pip install -e .
-# With RL support:
+# With RL + visualization support:
 pip install -e ".[rl,viz]"
+# The "viz" extra pulls in matplotlib, imageio and imageio-ffmpeg.
 ```
 
 ### Basic Usage
@@ -60,6 +61,7 @@ env = QuadrotorDeliveryEnv(
     num_targets=4,
     num_obstacles=10,
     task_mode="reach",  # or "delivery"
+    render_mode="human",  # see Render Modes below
 )
 
 obs, info = env.reset()
@@ -71,6 +73,54 @@ for _ in range(500):
     if terminated.any() or truncated.any():
         break
 env.close()
+```
+
+### Render Modes
+
+The environment supports the Gymnasium 1.0 style render protocol with five modes:
+
+| `render_mode`     | Returns                       | Use case |
+|-------------------|-------------------------------|----------|
+| `None`            | (no-op)                       | training |
+| `"human"`         | (no return)                   | live interactive window with HUD, trails, attitude |
+| `"rgb_array"`     | `np.ndarray (H, W, 3)`        | frame capture |
+| `"rgb_array_list"`| `list[np.ndarray]`            | per-step accumulation; access via `env.rgb_array_list` |
+| `"video"`         | (alias of `rgb_array_list`)   | video-ready buffering |
+| `"top_down"`      | `np.ndarray (H, W, 3)`        | fast 2D overhead view |
+
+The 3D renderer includes drone trails, quadrotor body frames (rotated by roll/pitch/yaw),
+a heads-up display (steps / reward / targets completed / carrying), a 2D top-down inset,
+and event flashes on target reach and collisions.
+
+### Recording / Playback
+
+```python
+from envs import QuadrotorDeliveryEnv
+from utils.visualization import record_episode, play_episode
+
+env = QuadrotorDeliveryEnv(render_mode="rgb_array", num_drones=4)
+
+# Save an episode to mp4
+record_episode(env, "logs/demo.mp4", fps=30, max_steps=500)
+
+# Or play back offline and save the animation
+play_episode(env, fps=30, max_steps=500, save_path="logs/demo.gif")
+```
+
+From the CLI:
+
+```bash
+# Live interactive window
+python scripts/eval.py --render --num_episodes 1
+
+# 2D top-down
+python scripts/eval.py --top_down --num_episodes 1
+
+# Record to mp4
+python scripts/eval.py --record --record_path logs/eval.mp4 --num_episodes 1
+
+# Record to gif
+python scripts/eval.py --record --record_path logs/eval.gif --num_episodes 1
 ```
 
 ### Training
@@ -107,6 +157,8 @@ python scripts/eval.py --model_path models/ppo_final.zip --render
 pytest tests/ -v
 # Or without pytest:
 python tests/test_env.py
+# Renderer-specific tests:
+pytest tests/test_renderer.py -v
 ```
 
 ## Configuration

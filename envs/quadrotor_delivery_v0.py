@@ -17,6 +17,21 @@ Action Space (per-agent):
 from typing import Optional, Tuple, Dict, Any, List
 import numpy as np
 import gymnasium as gym
+
+
+def _make_event(kind: str, position: np.ndarray, *, color: str = "white",
+                drone_id: int = -1, target_id: int = -1,
+                duration: float = 0.6):
+    """Construct a :class:`utils.rendering.RenderEvent` (lazy import)."""
+    from utils.rendering import RenderEvent
+    return RenderEvent(
+        kind=kind,
+        position=np.asarray(position, dtype=float),
+        drone_id=drone_id,
+        target_id=target_id,
+        color=color,
+        duration=duration,
+    )
 from gymnasium import spaces
 
 from core.dynamics import QuadrotorDynamics, QuadrotorParams
@@ -40,7 +55,10 @@ class QuadrotorDeliveryEnv(gym.Env):
 
     Supports centralized (flat) observations for CTDE training.
     """
-    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
+    metadata = {
+        "render_modes": ["human", "rgb_array", "rgb_array_list", "video", "top_down"],
+        "render_fps": 30,
+    }
 
     def __init__(
         self,
@@ -69,7 +87,7 @@ class QuadrotorDeliveryEnv(gym.Env):
             [-50.0, 50.0], [-50.0, 50.0], [0.0, 30.0]
         ])
         self.aggregate_phy_steps = aggregate_phy_steps
-        self.render_mode = render_mode
+        self.render_mode = self._normalize_render_mode(render_mode)
         self.device = device
 
         # --- Sub-modules ---
@@ -109,6 +127,15 @@ class QuadrotorDeliveryEnv(gym.Env):
         self._target_assigned: np.ndarray = None  # [n_targets] bool
         self._target_assignment: np.ndarray = None  # [n_drones] int
         self._steps: int = 0
+        self._last_rewards: np.ndarray = None
+        self._prev_target_assigned: np.ndarray = None
+        self._prev_carry_status: np.ndarray = None
+        self._collisions_this_step: list = []
+
+        # --- Renderer (lazily created) ---
+        self._renderer = None
+        self._rgb_buffer: List[np.ndarray] = []
+        self._render_event_queue: list = []
 
         self.np_random = np.random.default_rng(seed)
 
@@ -160,6 +187,13 @@ class QuadrotorDeliveryEnv(gym.Env):
         self._target_assigned = np.zeros(self.num_targets, dtype=bool)
         self._carry_status = np.zeros(self.num_drones, dtype=bool)
 
+        # Reset renderer-side accumulators
+        self._last_rewards = np.zeros(self.num_drones, dtype=np.float32)
+        self._prev_target_assigned = self._target_assigned.copy()
+        self._prev_carry_status = self._carry_status.copy()
+        self._render_event_queue = []
+        self._rgb_buffer = []
+
         obs = self._get_obs()
         info = self._get_info()
         return obs, info
@@ -193,8 +227,29 @@ class QuadrotorDeliveryEnv(gym.Env):
                 self._states[i][np.isnan(self._states[i])] = 0.0
                 self._states[i][np.isinf(self._states[i])] = 0.0
 
+        # --- Snapshot pre-update state for event detection ---
+        prev_assigned = (self._target_assigned.copy()
+                         if self._target_assigned is not None else None)
+        prev_carry = (self._carry_status.copy()
+                      if self._carry_status is not None else None)
+
         # --- Update target assignments & reached status ---
         self._update_target_status()
+
+        # --- Detect render events (target_reached, pickup, delivery) ---
+        if prev_assigned is not None and self._target_assigned is not None:
+            newly_done = self._target_assigned & ~prev_assigned
+            for j in np.where(newly_done)[0]:
+                t = self._targets[int(j)]
+                if t.target_type.value == 1:  # PICKUP
+                    kind, color = "pickup", "lime"
+                elif t.target_type.value == 2:  # DELIVERY
+                    kind, color = "delivery", "gold"
+                else:
+                    kind, color = "target_reached", "deepskyblue"
+                self._render_event_queue.append(
+                    _make_event(kind, t.position, color=color, target_id=int(j))
+                )
 
         # --- Check termination ---
         target_positions = np.array([t.position for t in self._targets])
@@ -205,6 +260,9 @@ class QuadrotorDeliveryEnv(gym.Env):
             self._carry_status, self.bounds, self.task_mode,
         )
 
+        # --- Detect collision events (heuristic) ---
+        self._detect_collisions(target_positions)
+
         # --- Compute rewards ---
         reward_info = self.reward_calc.compute(
             self._states, target_positions,
@@ -212,6 +270,8 @@ class QuadrotorDeliveryEnv(gym.Env):
             self._obstacle_positions, self._obstacle_radii,
             raw_actions, self.bounds, all_done,
         )
+
+        self._last_rewards = reward_info["agent_rewards"]
 
         # --- Build outputs ---
         obs = self._get_obs()
@@ -221,18 +281,105 @@ class QuadrotorDeliveryEnv(gym.Env):
         return obs, reward_info["agent_rewards"], terminated, truncated, info
 
     def render(self):
-        """Render the environment (placeholder, see rendering.py for full impl)."""
-        from utils.rendering import SimpleRenderer
-        if not hasattr(self, "_renderer"):
-            self._renderer = SimpleRenderer(self.bounds)
-        return self._renderer.render(
-            self._states, self._targets, self._obstacles,
-            self._target_assignment, mode=self.render_mode,
+        """Render the environment according to ``self.render_mode``.
+
+        Modes
+        -----
+        ``None``        - no-op, returns ``None``.
+        ``"human"``     - update interactive matplotlib window, returns ``None``.
+        ``"rgb_array"`` - return the current frame as an ``(H, W, 3)`` uint8 ndarray.
+        ``"rgb_array_list"`` - append the current frame to an internal buffer and
+            return the buffer. The buffer is reset on ``reset()`` and can be
+            retrieved via :attr:`rgb_array_list`.
+        ``"video"``     - alias of ``"rgb_array_list"`` (for clarity in user code).
+        ``"top_down"``  - return a 2D top-down view (numpy array).
+        """
+        if self.render_mode is None:
+            return None
+        from utils.rendering import Matplotlib3DRenderer, RenderState, RenderEvent
+        from utils.topdown import render_top_down  # local import to avoid cycles
+
+        if self._renderer is None:
+            show_top_down = self.render_mode != "top_down"
+            self._renderer = Matplotlib3DRenderer(
+                self.bounds,
+                show_trail=True,
+                show_attitude=True,
+                show_hud=True,
+                show_top_down=show_top_down,
+            )
+
+        info = self._get_info()
+        info_payload = {
+            "steps": self._steps,
+            "reward": self._last_rewards,
+            "completed": int(np.sum(self._target_assigned)) if self._target_assigned is not None else 0,
+            "total_targets": self.num_targets,
+            "mode": self.task_mode,
+        }
+        state = RenderState(
+            states=self._states,
+            targets=self._targets,
+            obstacles=self._obstacles,
+            assignment=self._target_assignment,
+            carry_status=self._carry_status,
+            info=info_payload,
+            events=self._render_event_queue,
         )
+        self._renderer.update(state)
+        # Clear the queue once consumed by the renderer
+        self._render_event_queue = []
+
+        if self.render_mode == "top_down":
+            return render_top_down(self)
+
+        if self.render_mode == "human":
+            return None
+
+        frame = self._renderer.get_frame()
+        if frame is None:
+            return None
+
+        if self.render_mode in ("rgb_array_list", "video"):
+            self._rgb_buffer.append(frame)
+            return list(self._rgb_buffer)
+        return frame
+
+    @property
+    def rgb_array_list(self) -> List[np.ndarray]:
+        """Frames accumulated since the last ``reset()`` (read-only copy)."""
+        return list(self._rgb_buffer)
 
     def close(self):
-        if hasattr(self, "_renderer"):
+        if self._renderer is not None:
             self._renderer.close()
+            self._renderer = None
+        self._rgb_buffer = []
+
+    # ---------------- Render helpers ----------------
+
+    @staticmethod
+    def _normalize_render_mode(mode):
+        """Map deprecated / user-friendly mode names to canonical names."""
+        if mode is None:
+            return None
+        if not isinstance(mode, str):
+            raise ValueError(f"render_mode must be str or None, got {type(mode)}")
+        canonical = {
+            "human": "human",
+            "rgb_array": "rgb_array",
+            "rgb_array_list": "rgb_array_list",
+            "rgb_list": "rgb_array_list",
+            "video": "rgb_array_list",
+            "top_down": "top_down",
+            "ansi": "rgb_array",
+        }
+        if mode not in canonical:
+            raise ValueError(
+                f"Unknown render_mode={mode!r}. "
+                f"Valid: {list(canonical.keys())}"
+            )
+        return canonical[mode]
 
     # ==================== Internal Methods ====================
 
@@ -333,6 +480,36 @@ class QuadrotorDeliveryEnv(gym.Env):
             if t.target_type == TargetType.DELIVERY and t.pair_id == pair_id:
                 return i
         return -1
+
+    def _detect_collisions(self, target_positions: np.ndarray) -> None:
+        """Detect obstacle and drone-drone collisions; enqueue render events.
+
+        Uses the same ``Obstacle.distance_to`` signed distance used by
+        :class:`core.termination.TerminationChecker` so events stay consistent
+        with collision-based termination.
+        """
+        # Drone vs obstacle
+        for i in range(self.num_drones):
+            pos = self._states[i, :3]
+            for k, obs in enumerate(self._obstacles):
+                if obs.distance_to(pos) < 0.0:
+                    self._render_event_queue.append(
+                        _make_event("collision", pos, color="red",
+                                    drone_id=i, duration=0.8)
+                    )
+        # Drone vs drone
+        if self.num_drones >= 2:
+            for i in range(self.num_drones):
+                for j in range(i + 1, self.num_drones):
+                    d = float(np.linalg.norm(
+                        self._states[i, :3] - self._states[j, :3]
+                    ))
+                    if d < 1.0:  # close-encounter threshold
+                        midpoint = 0.5 * (self._states[i, :3] + self._states[j, :3])
+                        self._render_event_queue.append(
+                            _make_event("collision", midpoint, color="orange",
+                                        drone_id=i, duration=0.8)
+                        )
 
     def _get_obs(self) -> Dict[str, np.ndarray]:
         target_positions = np.array([t.position for t in self._targets])
