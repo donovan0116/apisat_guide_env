@@ -1,0 +1,22 @@
+# Core dependencies
+numpy
+gymnasium>=0.29.0
+
+# Training (optional)
+# Install with: pip install -r requirements.txt
+# Or with RL: pip install -r requirements.txt ".[rl]"
+
+# Multi-agent (optional)
+# pettingzoo>=1.24.0
+
+# RL algorithms (optional)
+# stable-baselines3>=2.1.0
+# torch>=2.0.0
+# Or for distributed MARL:
+# ray[rllib]>=2.0.0
+
+# Visualization
+matplotlib>=3.7.0
+
+# Testing
+pytest>=7.0.0
