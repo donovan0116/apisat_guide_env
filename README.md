@@ -137,8 +137,12 @@ python scripts/train.py --algo ippo --num_drones 4 --num_targets 4
 # 3. CTDE MAPPO (centralized critic + decentralized actors) [recommended]
 python scripts/ctde_trainer.py --num_drones 4 --num_targets 4 --total_steps 500000
 
+# 4. Standalone MAPPO baseline (tanh-squashed actions + centralized critic)
+python3 scripts/mappo_train.py --num_drones 4 --num_targets 4 --total_steps 500000
+
 # With delivery mode & more obstacles
 python scripts/ctde_trainer.py --num_drones 6 --task_mode delivery --num_obstacles 20
+python3 scripts/mappo_train.py --num_drones 6 --task_mode delivery --num_obstacles 20
 ```
 
 ### Evaluation

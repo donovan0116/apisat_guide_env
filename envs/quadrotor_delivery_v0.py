@@ -14,16 +14,31 @@ Action Space (per-agent):
     - Box(4, low=-1, high=1)  [thrust, taux, tauy, tauz] normalized
 """
 
+from dataclasses import dataclass
 from typing import Optional, Tuple, Dict, Any, List
 import numpy as np
 import gymnasium as gym
+
+
+@dataclass
+class _FallbackRenderEvent:
+    kind: str
+    position: np.ndarray
+    drone_id: int = -1
+    target_id: int = -1
+    timestamp: float = 0.0
+    duration: float = 0.6
+    color: str = "white"
 
 
 def _make_event(kind: str, position: np.ndarray, *, color: str = "white",
                 drone_id: int = -1, target_id: int = -1,
                 duration: float = 0.6):
     """Construct a :class:`utils.rendering.RenderEvent` (lazy import)."""
-    from utils.rendering import RenderEvent
+    try:
+        from utils.rendering import RenderEvent
+    except ImportError:
+        RenderEvent = _FallbackRenderEvent
     return RenderEvent(
         kind=kind,
         position=np.asarray(position, dtype=float),
