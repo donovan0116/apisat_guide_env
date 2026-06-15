@@ -25,10 +25,10 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 import matplotlib
 matplotlib.use("Agg", force=True)
 
-from core.dynamics import QuadrotorDynamics
-from core.target import Obstacle, Target, TargetType
-from envs import QuadrotorDeliveryEnv
-from utils.rendering import (
+from src.core.dynamics import QuadrotorDynamics
+from src.core.target import Obstacle, Target, TargetType
+from src.envs import QuadrotorDeliveryEnv
+from src.utils.rendering import (
     Matplotlib3DRenderer,
     RenderEvent,
     RenderState,
@@ -288,7 +288,7 @@ class TestEnvRenderModes:
 
 class TestRecordEpisode:
     def test_record_mp4(self):
-        from utils.visualization import record_episode
+        from src.utils.visualization import record_episode
         env = self._env_for_recording("rgb_array")
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "out.mp4")
@@ -305,7 +305,7 @@ class TestRecordEpisode:
         env.close()
 
     def test_record_gif(self):
-        from utils.visualization import record_episode
+        from src.utils.visualization import record_episode
         env = self._env_for_recording("rgb_array")
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "out.gif")
@@ -325,7 +325,7 @@ class TestRecordEpisode:
 
 class TestPlayEpisode:
     def test_play_episode_save(self):
-        from utils.visualization import play_episode
+        from src.utils.visualization import play_episode
         env = QuadrotorDeliveryEnv(
             num_drones=2, num_targets=2, num_obstacles=2, seed=42,
         )
@@ -348,7 +348,7 @@ class TestPlayEpisode:
 
 class TestTopDownRenderer:
     def test_top_down_shape(self):
-        from utils.topdown import render_top_down
+        from src.utils.topdown import render_top_down
         env = QuadrotorDeliveryEnv(
             num_drones=2, num_targets=2, num_obstacles=2, seed=42,
         )
@@ -361,7 +361,7 @@ class TestTopDownRenderer:
         env.close()
 
     def test_top_down_trails_grow(self):
-        from utils.topdown import render_top_down
+        from src.utils.topdown import render_top_down
         env = QuadrotorDeliveryEnv(
             num_drones=2, num_targets=2, num_obstacles=2, seed=42,
         )

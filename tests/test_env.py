@@ -9,13 +9,13 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from core.dynamics import QuadrotorDynamics, QuadrotorParams
-from core.state import ObsConfig, build_local_obs
-from core.action import ActionConfig, normalize_action
-from core.target import generate_random_targets, generate_random_obstacles
-from core.reward import RewardCalculator
-from core.termination import TerminationChecker
-from envs import QuadrotorDeliveryEnv, ParallelQuadrotorDelivery
+from src.core.dynamics import QuadrotorDynamics, QuadrotorParams
+from src.core.state import ObsConfig, build_local_obs
+from src.core.action import ActionConfig, normalize_action
+from src.core.target import generate_random_targets, generate_random_obstacles
+from src.core.reward import RewardCalculator
+from src.core.termination import TerminationChecker
+from src.envs import QuadrotorDeliveryEnv, ParallelQuadrotorDelivery
 
 
 class TestDynamics:
