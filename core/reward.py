@@ -17,18 +17,27 @@ from typing import Dict, List
 
 @dataclass
 class RewardConfig:
-    """Reward function configuration."""
-    target_reached: float = 20.0
-    step_penalty: float = 0.01
+    """Reward function configuration.
+
+    Tuned defaults prioritize reaching targets over distance-based penalties.
+    The old defaults made the distance penalty dominate 99% of the reward
+    signal, which prevented learning.
+    """
+
+    target_reached: float = 500.0
+    step_penalty: float = 0.05
     obstacle_collision: float = -50.0
     drone_collision: float = -30.0
     out_of_bounds_penalty: float = -10.0
     energy_coeff: float = 0.001
-    completion_bonus: float = 100.0
-    distance_scale: float = 0.1      # shaping reward: scale for distance reduction
+    completion_bonus: float = 1000.0
+    distance_scale: float = (
+        10.0  # potential-based shaping: reward *decrease* in distance
+    )
+    orientation_penalty: float = 0.1  # penalize non-level roll/pitch (per radian)
     use_shaping: bool = True
-    collision_radius: float = 1.0    # drone collision radius
-    ground_penalty: bool = True      # penalty for flying too low (z < 0)
+    collision_radius: float = 1.0  # drone collision radius
+    ground_penalty: bool = True  # penalty for flying too low (z < 0)
 
 
 class RewardCalculator:
@@ -39,14 +48,15 @@ class RewardCalculator:
 
     def compute(
         self,
-        states: np.ndarray,              # [n_drones, 12] drone states
-        target_positions: np.ndarray,    # [n_targets, 3]
-        target_assigned: np.ndarray,     # [n_targets] bool
-        target_assignment: np.ndarray,   # [n_drones] int, -1 = unassigned
+        states: np.ndarray,  # [n_drones, 12] drone states
+        prev_states: np.ndarray,  # [n_drones, 12] states at previous step
+        target_positions: np.ndarray,  # [n_targets, 3]
+        target_assigned: np.ndarray,  # [n_targets] bool
+        target_assignment: np.ndarray,  # [n_drones] int, -1 = unassigned
         obstacle_positions: np.ndarray,  # [n_obstacles, 3]
-        obstacle_radii: np.ndarray,      # [n_obstacles]
-        actions: np.ndarray,             # [n_drones, 4] physical actions
-        bounds: np.ndarray,              # [[xmin,xmax],[ymin,ymax],[zmin,zmax]]
+        obstacle_radii: np.ndarray,  # [n_obstacles]
+        actions: np.ndarray,  # [n_drones, 4] physical actions
+        bounds: np.ndarray,  # [[xmin,xmax],[ymin,ymax],[zmin,zmax]]
         all_done: bool,
     ) -> Dict[str, np.ndarray]:
         """
@@ -68,6 +78,7 @@ class RewardCalculator:
             "collision": np.zeros(n_drones),
             "energy": np.zeros(n_drones),
             "shaping": np.zeros(n_drones),
+            "orientation": np.zeros(n_drones),
         }
 
         # === Step penalty (all agents) ===
@@ -81,13 +92,18 @@ class RewardCalculator:
                 if dist < 2.0:  # success radius (TODO: parameterize)
                     components["target_reached"][i] = config.target_reached
 
-        # === Distance shaping reward ===
+        # === Distance shaping reward (potential-based) ===
         if config.use_shaping:
             for i in range(n_drones):
                 aid = target_assignment[i]
                 if aid >= 0 and aid < len(target_positions):
-                    dist = np.linalg.norm(states[i, :3] - target_positions[aid])
-                    components["shaping"][i] = -config.distance_scale * dist
+                    prev_dist = np.linalg.norm(
+                        prev_states[i, :3] - target_positions[aid]
+                    )
+                    curr_dist = np.linalg.norm(states[i, :3] - target_positions[aid])
+                    components["shaping"][i] = config.distance_scale * (
+                        prev_dist - curr_dist
+                    )
 
         # === Collision penalties ===
         # Obstacle collisions
@@ -113,9 +129,14 @@ class RewardCalculator:
         # Out of bounds
         for i in range(n_drones):
             pos = states[i, :3]
-            if (pos[0] < bounds[0, 0] or pos[0] > bounds[0, 1] or
-                pos[1] < bounds[1, 0] or pos[1] > bounds[1, 1] or
-                pos[2] < bounds[2, 0] or pos[2] > bounds[2, 1]):
+            if (
+                pos[0] < bounds[0, 0]
+                or pos[0] > bounds[0, 1]
+                or pos[1] < bounds[1, 0]
+                or pos[1] > bounds[1, 1]
+                or pos[2] < bounds[2, 0]
+                or pos[2] > bounds[2, 1]
+            ):
                 components["collision"][i] += config.out_of_bounds_penalty
 
         # Ground penalty
@@ -129,6 +150,13 @@ class RewardCalculator:
             thrust = actions[i, 0]
             torque_mag = np.sum(np.abs(actions[i, 1:4]))
             components["energy"][i] = -config.energy_coeff * (thrust + torque_mag)
+
+        # === Orientation penalty (encourage level flight) ===
+        for i in range(n_drones):
+            euler = states[i, 6:9]
+            components["orientation"][i] = -config.orientation_penalty * (
+                abs(euler[0]) + abs(euler[1])
+            )
 
         # === Sum agent rewards ===
         for key in components:

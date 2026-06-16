@@ -18,13 +18,14 @@ from core.termination import TerminationConfig
 @dataclass
 class EnvConfig:
     """Environment configuration."""
+
     num_drones: int = 4
     num_targets: int = 4
     num_obstacles: int = 10
-    task_mode: str = "reach"       # "reach" | "delivery"
+    task_mode: str = "reach"  # "reach" | "delivery"
     bounds: Tuple = (-50, 50, -50, 50, 0, 30)  # (xmin, xmax, ymin, ymax, zmin, zmax)
     aggregate_phy_steps: int = 1
-    max_steps: int = 500
+    max_steps: int = 2000
 
     @property
     def bounds_array(self) -> np.ndarray:
@@ -35,7 +36,8 @@ class EnvConfig:
 @dataclass
 class TrainingConfig:
     """Training configuration."""
-    algorithm: str = "ppo"          # "ppo" | "sac" | "mappo" | "maddpg"
+
+    algorithm: str = "ppo"  # "ppo" | "sac" | "mappo" | "maddpg"
     total_timesteps: int = 1_000_000
     n_envs: int = 4
     seed: int = 42
@@ -67,6 +69,7 @@ class TrainingConfig:
 @dataclass
 class FullConfig:
     """Top-level configuration aggregating all sub-configs."""
+
     env: EnvConfig = field(default_factory=EnvConfig)
     quad: QuadrotorParams = field(default_factory=QuadrotorParams)
     obs: ObsConfig = field(default_factory=ObsConfig)

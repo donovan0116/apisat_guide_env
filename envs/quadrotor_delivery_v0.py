@@ -31,9 +31,15 @@ class _FallbackRenderEvent:
     color: str = "white"
 
 
-def _make_event(kind: str, position: np.ndarray, *, color: str = "white",
-                drone_id: int = -1, target_id: int = -1,
-                duration: float = 0.6):
+def _make_event(
+    kind: str,
+    position: np.ndarray,
+    *,
+    color: str = "white",
+    drone_id: int = -1,
+    target_id: int = -1,
+    duration: float = 0.6,
+):
     """Construct a :class:`utils.rendering.RenderEvent` (lazy import)."""
     try:
         from utils.rendering import RenderEvent
@@ -47,14 +53,19 @@ def _make_event(kind: str, position: np.ndarray, *, color: str = "white",
         color=color,
         duration=duration,
     )
+
+
 from gymnasium import spaces
 
 from core.dynamics import QuadrotorDynamics, QuadrotorParams
 from core.state import ObsConfig, build_local_obs, build_global_obs
 from core.action import ActionConfig, normalize_action
 from core.target import (
-    Target, TargetType, Obstacle,
-    generate_random_targets, generate_random_obstacles,
+    Target,
+    TargetType,
+    Obstacle,
+    generate_random_targets,
+    generate_random_obstacles,
 )
 from core.reward import RewardConfig, RewardCalculator
 from core.termination import TerminationConfig, TerminationChecker
@@ -70,6 +81,7 @@ class QuadrotorDeliveryEnv(gym.Env):
 
     Supports centralized (flat) observations for CTDE training.
     """
+
     metadata = {
         "render_modes": ["human", "rgb_array", "rgb_array_list", "video", "top_down"],
         "render_fps": 30,
@@ -81,7 +93,7 @@ class QuadrotorDeliveryEnv(gym.Env):
         num_targets: int = 4,
         num_obstacles: int = 10,
         task_mode: str = "reach",
-        bounds: np.ndarray = None,       # [[xmin,xmax],[ymin,ymax],[zmin,zmax]]
+        bounds: np.ndarray = None,  # [[xmin,xmax],[ymin,ymax],[zmin,zmax]]
         quad_params: QuadrotorParams = None,
         obs_config: ObsConfig = None,
         act_config: ActionConfig = None,
@@ -98,9 +110,11 @@ class QuadrotorDeliveryEnv(gym.Env):
         self.num_targets = num_targets
         self.num_obstacles = num_obstacles
         self.task_mode = task_mode
-        self.bounds = bounds if bounds is not None else np.array([
-            [-50.0, 50.0], [-50.0, 50.0], [0.0, 30.0]
-        ])
+        self.bounds = (
+            bounds
+            if bounds is not None
+            else np.array([[-50.0, 50.0], [-50.0, 50.0], [0.0, 30.0]])
+        )
         self.aggregate_phy_steps = aggregate_phy_steps
         self.render_mode = self._normalize_render_mode(render_mode)
         self.device = device
@@ -108,7 +122,8 @@ class QuadrotorDeliveryEnv(gym.Env):
         # --- Sub-modules ---
         self.dynamics = QuadrotorDynamics(quad_params)
         self.obs_config = obs_config or ObsConfig(
-            max_num_drones=num_drones, max_num_targets=num_targets,
+            max_num_drones=num_drones,
+            max_num_targets=num_targets,
             max_num_obstacles=num_obstacles,
         )
         self.act_config = act_config or ActionConfig()
@@ -119,26 +134,27 @@ class QuadrotorDeliveryEnv(gym.Env):
         self.agent_obs_dim = self.obs_config.total_dim
         self.agent_act_dim = self.dynamics.action_dim
 
-        self.observation_space = spaces.Dict({
-            "agent_obs": spaces.Box(
-                -1.0, 1.0, shape=(num_drones, self.agent_obs_dim), dtype=np.float32
-            ),
-            "global_obs": spaces.Box(
-                -np.inf, np.inf,
-                shape=(self._global_obs_dim(),), dtype=np.float32
-            ),
-        })
+        self.observation_space = spaces.Dict(
+            {
+                "agent_obs": spaces.Box(
+                    -1.0, 1.0, shape=(num_drones, self.agent_obs_dim), dtype=np.float32
+                ),
+                "global_obs": spaces.Box(
+                    -np.inf, np.inf, shape=(self._global_obs_dim(),), dtype=np.float32
+                ),
+            }
+        )
         self.action_space = spaces.Box(
             -1.0, 1.0, shape=(num_drones, self.agent_act_dim), dtype=np.float32
         )
 
         # --- Internal state ---
-        self._states: np.ndarray = None        # [n_drones, 12]
+        self._states: np.ndarray = None  # [n_drones, 12]
         self._targets: List[Target] = None
         self._obstacles: List[Obstacle] = None
         self._obstacle_positions: np.ndarray = None
         self._obstacle_radii: np.ndarray = None
-        self._carry_status: np.ndarray = None     # [n_drones] bool
+        self._carry_status: np.ndarray = None  # [n_drones] bool
         self._target_assigned: np.ndarray = None  # [n_targets] bool
         self._target_assignment: np.ndarray = None  # [n_drones] int
         self._steps: int = 0
@@ -186,7 +202,9 @@ class QuadrotorDeliveryEnv(gym.Env):
 
         # Generate targets
         self._targets = generate_random_targets(
-            self.num_targets, self.bounds, mode=self.task_mode,
+            self.num_targets,
+            self.bounds,
+            mode=self.task_mode,
             drone_positions=drone_init_positions,
             obstacle_positions=self._obstacle_positions,
             obstacle_radii=self._obstacle_radii,
@@ -213,7 +231,9 @@ class QuadrotorDeliveryEnv(gym.Env):
         info = self._get_info()
         return obs, info
 
-    def step(self, action: np.ndarray) -> Tuple[
+    def step(
+        self, action: np.ndarray
+    ) -> Tuple[
         Dict[str, np.ndarray], np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]
     ]:
         """
@@ -225,11 +245,16 @@ class QuadrotorDeliveryEnv(gym.Env):
         """
         self._steps += 1
 
+        # --- Snapshot state before dynamics for potential-based shaping ---
+        prev_states = self._states.copy()
+
         # --- Apply dynamics ---
-        raw_actions = np.array([
-            normalize_action(action[i], self.act_config)
-            for i in range(self.num_drones)
-        ])
+        raw_actions = np.array(
+            [
+                normalize_action(action[i], self.act_config)
+                for i in range(self.num_drones)
+            ]
+        )
 
         for _ in range(self.aggregate_phy_steps):
             for i in range(self.num_drones):
@@ -243,10 +268,12 @@ class QuadrotorDeliveryEnv(gym.Env):
                 self._states[i][np.isinf(self._states[i])] = 0.0
 
         # --- Snapshot pre-update state for event detection ---
-        prev_assigned = (self._target_assigned.copy()
-                         if self._target_assigned is not None else None)
-        prev_carry = (self._carry_status.copy()
-                      if self._carry_status is not None else None)
+        prev_assigned = (
+            self._target_assigned.copy() if self._target_assigned is not None else None
+        )
+        prev_carry = (
+            self._carry_status.copy() if self._carry_status is not None else None
+        )
 
         # --- Update target assignments & reached status ---
         self._update_target_status()
@@ -269,10 +296,15 @@ class QuadrotorDeliveryEnv(gym.Env):
         # --- Check termination ---
         target_positions = np.array([t.position for t in self._targets])
         terminated, truncated, all_done = self.term_checker.check(
-            self._states, target_positions,
-            self._target_assigned, self._target_assignment,
-            self._obstacle_positions, self._obstacle_radii,
-            self._carry_status, self.bounds, self.task_mode,
+            self._states,
+            target_positions,
+            self._target_assigned,
+            self._target_assignment,
+            self._obstacle_positions,
+            self._obstacle_radii,
+            self._carry_status,
+            self.bounds,
+            self.task_mode,
         )
 
         # --- Detect collision events (heuristic) ---
@@ -280,10 +312,16 @@ class QuadrotorDeliveryEnv(gym.Env):
 
         # --- Compute rewards ---
         reward_info = self.reward_calc.compute(
-            self._states, target_positions,
-            self._target_assigned, self._target_assignment,
-            self._obstacle_positions, self._obstacle_radii,
-            raw_actions, self.bounds, all_done,
+            self._states,
+            prev_states,
+            target_positions,
+            self._target_assigned,
+            self._target_assignment,
+            self._obstacle_positions,
+            self._obstacle_radii,
+            raw_actions,
+            self.bounds,
+            all_done,
         )
 
         self._last_rewards = reward_info["agent_rewards"]
@@ -328,7 +366,11 @@ class QuadrotorDeliveryEnv(gym.Env):
         info_payload = {
             "steps": self._steps,
             "reward": self._last_rewards,
-            "completed": int(np.sum(self._target_assigned)) if self._target_assigned is not None else 0,
+            "completed": (
+                int(np.sum(self._target_assigned))
+                if self._target_assigned is not None
+                else 0
+            ),
             "total_targets": self.num_targets,
             "mode": self.task_mode,
         }
@@ -391,8 +433,7 @@ class QuadrotorDeliveryEnv(gym.Env):
         }
         if mode not in canonical:
             raise ValueError(
-                f"Unknown render_mode={mode!r}. "
-                f"Valid: {list(canonical.keys())}"
+                f"Unknown render_mode={mode!r}. " f"Valid: {list(canonical.keys())}"
             )
         return canonical[mode]
 
@@ -409,11 +450,15 @@ class QuadrotorDeliveryEnv(gym.Env):
                     [self.bounds[0, 1], self.bounds[1, 1], 5.0],
                 )
                 # Check distance to other drones
-                if i > 0 and np.any(np.linalg.norm(positions[:i, :2] - pos[:2], axis=1) < 5.0):
+                if i > 0 and np.any(
+                    np.linalg.norm(positions[:i, :2] - pos[:2], axis=1) < 5.0
+                ):
                     continue
                 # Check distance to obstacles
                 if len(self._obstacle_positions) > 0:
-                    dists = np.linalg.norm(self._obstacle_positions[:, :2] - pos[:2], axis=1)
+                    dists = np.linalg.norm(
+                        self._obstacle_positions[:, :2] - pos[:2], axis=1
+                    )
                     if np.any(dists < self._obstacle_radii + 3.0):
                         continue
                 valid = True
@@ -439,17 +484,21 @@ class QuadrotorDeliveryEnv(gym.Env):
         drones = list(range(n_drones))
 
         # Sort drones by some heuristic (closest to any target)
-        min_dists = np.array([
-            np.min(np.linalg.norm(target_pos - states[i, :3], axis=1))
-            for i in range(n_drones)
-        ])
+        min_dists = np.array(
+            [
+                np.min(np.linalg.norm(target_pos - states[i, :3], axis=1))
+                for i in range(n_drones)
+            ]
+        )
         drone_order = np.argsort(min_dists)
 
         for i in drone_order:
             if not available_targets:
                 break
             pos_i = states[i, :3]
-            dists = {t: np.linalg.norm(target_pos[t] - pos_i) for t in available_targets}
+            dists = {
+                t: np.linalg.norm(target_pos[t] - pos_i) for t in available_targets
+            }
             best_target = min(dists, key=dists.get)
             assignment[i] = best_target
             available_targets.remove(best_target)
@@ -509,21 +558,25 @@ class QuadrotorDeliveryEnv(gym.Env):
             for k, obs in enumerate(self._obstacles):
                 if obs.distance_to(pos) < 0.0:
                     self._render_event_queue.append(
-                        _make_event("collision", pos, color="red",
-                                    drone_id=i, duration=0.8)
+                        _make_event(
+                            "collision", pos, color="red", drone_id=i, duration=0.8
+                        )
                     )
         # Drone vs drone
         if self.num_drones >= 2:
             for i in range(self.num_drones):
                 for j in range(i + 1, self.num_drones):
-                    d = float(np.linalg.norm(
-                        self._states[i, :3] - self._states[j, :3]
-                    ))
+                    d = float(np.linalg.norm(self._states[i, :3] - self._states[j, :3]))
                     if d < 1.0:  # close-encounter threshold
                         midpoint = 0.5 * (self._states[i, :3] + self._states[j, :3])
                         self._render_event_queue.append(
-                            _make_event("collision", midpoint, color="orange",
-                                        drone_id=i, duration=0.8)
+                            _make_event(
+                                "collision",
+                                midpoint,
+                                color="orange",
+                                drone_id=i,
+                                duration=0.8,
+                            )
                         )
 
     def _get_obs(self) -> Dict[str, np.ndarray]:
@@ -531,14 +584,23 @@ class QuadrotorDeliveryEnv(gym.Env):
         agent_obs = np.zeros((self.num_drones, self.agent_obs_dim), dtype=np.float32)
         for i in range(self.num_drones):
             agent_obs[i] = build_local_obs(
-                i, self._states, target_positions,
-                self._target_assigned, self._obstacle_positions,
-                self._obstacle_radii, self._carry_status, self.obs_config,
+                i,
+                self._states,
+                target_positions,
+                self._target_assigned,
+                self._obstacle_positions,
+                self._obstacle_radii,
+                self._carry_status,
+                self.obs_config,
             )
         global_obs = build_global_obs(
-            self._states, target_positions, self._target_assigned,
-            self._obstacle_positions, self._obstacle_radii,
-            self._carry_status, self.obs_config,
+            self._states,
+            target_positions,
+            self._target_assigned,
+            self._obstacle_positions,
+            self._obstacle_radii,
+            self._carry_status,
+            self.obs_config,
         )
         return {"agent_obs": agent_obs, "global_obs": global_obs}
 
@@ -556,9 +618,14 @@ class QuadrotorDeliveryEnv(gym.Env):
         }
 
     def _global_obs_dim(self) -> int:
-        return (self.num_drones * 12 + self.num_targets * 3 +
-                self.num_targets + self.num_obstacles * 3 +
-                self.num_obstacles + self.num_drones)
+        return (
+            self.num_drones * 12
+            + self.num_targets * 3
+            + self.num_targets
+            + self.num_obstacles * 3
+            + self.num_obstacles
+            + self.num_drones
+        )
 
     # ==================== Property accessors ====================
 

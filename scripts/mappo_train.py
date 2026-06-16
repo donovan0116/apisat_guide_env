@@ -35,19 +35,60 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from envs import ParallelQuadrotorDelivery
 from utils.config import FullConfig
 
-
 LOG_STD_MIN = -5.0
 LOG_STD_MAX = 2.0
 TANH_EPS = 1e-6
 
 
-def mlp(in_dim: int, out_dim: int, hidden: int, n_layers: int) -> nn.Sequential:
+class RunningMeanStd:
+    """Running mean and standard deviation for online normalization."""
+
+    def __init__(self, shape: tuple, eps: float = 1e-8):
+        self.mean = np.zeros(shape, dtype=np.float32)
+        self.var = np.ones(shape, dtype=np.float32)
+        self.count = eps
+
+    def update(self, x: np.ndarray):
+        """Update running statistics with a batch of samples."""
+        batch_mean = x.mean(axis=0)
+        batch_var = x.var(axis=0)
+        batch_count = x.shape[0]
+        delta = batch_mean - self.mean
+        total_count = self.count + batch_count
+        self.mean = self.mean + delta * batch_count / total_count
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        m2 = m_a + m_b + delta**2 * self.count * batch_count / total_count
+        self.var = m2 / total_count
+        self.count = total_count
+
+    def normalize(self, x: np.ndarray) -> np.ndarray:
+        return (x - self.mean) / np.sqrt(self.var + 1e-8)
+
+
+def mlp(
+    in_dim: int,
+    out_dim: int,
+    hidden: int,
+    n_layers: int,
+    activation: str = "relu",
+    orthogonal_init: bool = True,
+) -> nn.Sequential:
     layers = []
     last_dim = in_dim
+    act_cls = nn.ReLU if activation == "relu" else nn.Tanh
     for _ in range(n_layers):
-        layers.extend([nn.Linear(last_dim, hidden), nn.Tanh()])
+        layers.append(nn.Linear(last_dim, hidden))
+        if orthogonal_init:
+            nn.init.orthogonal_(layers[-1].weight, gain=np.sqrt(2))
+            nn.init.constant_(layers[-1].bias, 0.0)
+        layers.append(act_cls())
         last_dim = hidden
     layers.append(nn.Linear(last_dim, out_dim))
+    if orthogonal_init:
+        # Last layer: small weight for value, small/zero for policy mean
+        nn.init.orthogonal_(layers[-1].weight, gain=0.01)
+        nn.init.constant_(layers[-1].bias, 0.0)
     return nn.Sequential(*layers)
 
 
@@ -61,12 +102,16 @@ class SquashedGaussianActor(nn.Module):
 
     def __init__(self, obs_dim: int, act_dim: int, hidden: int, n_layers: int):
         super().__init__()
-        self.net = mlp(obs_dim, hidden, hidden, n_layers)
+        self.net = mlp(
+            obs_dim, hidden, hidden, n_layers, activation="relu", orthogonal_init=True
+        )
         self.mean = nn.Linear(hidden, act_dim)
         self.log_std = nn.Linear(hidden, act_dim)
 
+        nn.init.orthogonal_(self.mean.weight, gain=0.01)
         nn.init.constant_(self.mean.bias, 0.0)
-        nn.init.constant_(self.log_std.bias, -0.5)
+        nn.init.orthogonal_(self.log_std.weight, gain=0.01)
+        nn.init.constant_(self.log_std.bias, -0.5)  # std ~0.6 at init for exploration
 
     def forward(self, obs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         x = self.net(obs)
@@ -107,14 +152,18 @@ class CentralCritic(nn.Module):
 
     def __init__(self, global_dim: int, hidden: int, n_layers: int):
         super().__init__()
-        self.net = mlp(global_dim, 1, hidden, n_layers)
+        self.net = mlp(
+            global_dim, 1, hidden, n_layers, activation="relu", orthogonal_init=True
+        )
 
     def forward(self, global_obs: torch.Tensor) -> torch.Tensor:
         return self.net(global_obs).squeeze(-1)
 
 
 class RolloutBuffer:
-    def __init__(self, n_steps: int, n_agents: int, obs_dim: int, global_dim: int, act_dim: int):
+    def __init__(
+        self, n_steps: int, n_agents: int, obs_dim: int, global_dim: int, act_dim: int
+    ):
         self.n_steps = n_steps
         self.n_agents = n_agents
         self.obs_dim = obs_dim
@@ -124,9 +173,13 @@ class RolloutBuffer:
 
     def reset(self):
         self.ptr = 0
-        self.obs = np.zeros((self.n_steps, self.n_agents, self.obs_dim), dtype=np.float32)
+        self.obs = np.zeros(
+            (self.n_steps, self.n_agents, self.obs_dim), dtype=np.float32
+        )
         self.global_obs = np.zeros((self.n_steps, self.global_dim), dtype=np.float32)
-        self.actions = np.zeros((self.n_steps, self.n_agents, self.act_dim), dtype=np.float32)
+        self.actions = np.zeros(
+            (self.n_steps, self.n_agents, self.act_dim), dtype=np.float32
+        )
         self.log_probs = np.zeros((self.n_steps, self.n_agents), dtype=np.float32)
         self.rewards = np.zeros((self.n_steps, self.n_agents), dtype=np.float32)
         self.values = np.zeros(self.n_steps, dtype=np.float32)
@@ -148,14 +201,14 @@ class RolloutBuffer:
 
     def data(self):
         return {
-            "obs": self.obs[:self.ptr],
-            "global_obs": self.global_obs[:self.ptr],
-            "actions": self.actions[:self.ptr],
-            "log_probs": self.log_probs[:self.ptr],
-            "rewards": self.rewards[:self.ptr],
-            "values": self.values[:self.ptr],
-            "dones": self.dones[:self.ptr],
-            "masks": self.masks[:self.ptr],
+            "obs": self.obs[: self.ptr],
+            "global_obs": self.global_obs[: self.ptr],
+            "actions": self.actions[: self.ptr],
+            "log_probs": self.log_probs[: self.ptr],
+            "rewards": self.rewards[: self.ptr],
+            "values": self.values[: self.ptr],
+            "dones": self.dones[: self.ptr],
+            "masks": self.masks[: self.ptr],
         }
 
 
@@ -189,11 +242,43 @@ class MAPPOTrainer:
             train_cfg.value_n_layers,
         ).to(self.device)
 
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=train_cfg.learning_rate)
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=train_cfg.learning_rate)
-        self.buffer = RolloutBuffer(
-            train_cfg.n_steps, self.n_agents, self.obs_dim, self.global_dim, self.act_dim
+        self.actor_optimizer = torch.optim.Adam(
+            self.actor.parameters(), lr=train_cfg.learning_rate
         )
+        self.critic_optimizer = torch.optim.Adam(
+            self.critic.parameters(), lr=train_cfg.learning_rate
+        )
+        self.buffer = RolloutBuffer(
+            train_cfg.n_steps,
+            self.n_agents,
+            self.obs_dim,
+            self.global_dim,
+            self.act_dim,
+        )
+
+        # Online normalization for stability
+        self.obs_rms = RunningMeanStd((self.obs_dim,))
+        self.global_obs_rms = RunningMeanStd((self.global_dim,))
+
+    def _normalize_obs(self, obs: np.ndarray, update: bool = True) -> np.ndarray:
+        """Normalize local observations using running statistics."""
+        flat = obs.reshape(-1, self.obs_dim)
+        if update:
+            self.obs_rms.update(flat)
+        norm = self.obs_rms.normalize(flat)
+        return norm.reshape(obs.shape)
+
+    def _normalize_global_obs(
+        self, global_obs: np.ndarray, update: bool = True
+    ) -> np.ndarray:
+        """Normalize global observations using running statistics."""
+        if global_obs.ndim == 1:
+            g = global_obs[None, :]
+        else:
+            g = global_obs
+        if update:
+            self.global_obs_rms.update(g)
+        return self.global_obs_rms.normalize(g).reshape(global_obs.shape)
 
     def _make_env(self) -> ParallelQuadrotorDelivery:
         cfg = self.config
@@ -219,7 +304,9 @@ class MAPPOTrainer:
         os.makedirs(cfg.log_dir, exist_ok=True)
         writer = SummaryWriter(cfg.log_dir) if SummaryWriter else None
         if writer is None:
-            print("[MAPPO] TensorBoard unavailable. Install tensorboard to enable logging.")
+            print(
+                "[MAPPO] TensorBoard unavailable. Install tensorboard to enable logging."
+            )
 
         obs_dict, info = env.reset(seed=cfg.seed)
         global_obs = info["global_obs"].astype(np.float32)
@@ -242,7 +329,9 @@ class MAPPOTrainer:
             for _ in range(cfg.n_steps):
                 active_agents = set(env.agents)
                 obs_batch = np.zeros((self.n_agents, self.obs_dim), dtype=np.float32)
-                actions_batch = np.zeros((self.n_agents, self.act_dim), dtype=np.float32)
+                actions_batch = np.zeros(
+                    (self.n_agents, self.act_dim), dtype=np.float32
+                )
                 log_probs = np.zeros(self.n_agents, dtype=np.float32)
                 masks = np.zeros(self.n_agents, dtype=np.float32)
 
@@ -252,8 +341,16 @@ class MAPPOTrainer:
                     obs_batch[i] = obs_dict[agent_id]
                     masks[i] = 1.0
 
-                obs_tensor = torch.as_tensor(obs_batch, dtype=torch.float32, device=self.device)
-                global_tensor = torch.as_tensor(global_obs, dtype=torch.float32, device=self.device)
+                # Normalize inputs using running statistics
+                norm_obs_batch = self._normalize_obs(obs_batch)
+                norm_global_obs = self._normalize_global_obs(global_obs)
+
+                obs_tensor = torch.as_tensor(
+                    norm_obs_batch, dtype=torch.float32, device=self.device
+                )
+                global_tensor = torch.as_tensor(
+                    norm_global_obs, dtype=torch.float32, device=self.device
+                )
 
                 with torch.no_grad():
                     action_tensor, log_prob_tensor, _ = self.actor.sample(obs_tensor)
@@ -280,8 +377,8 @@ class MAPPOTrainer:
                 )
 
                 self.buffer.add(
-                    obs_batch,
-                    global_obs,
+                    norm_obs_batch,
+                    norm_global_obs,
                     actions_batch,
                     log_probs,
                     reward_batch,
@@ -304,9 +401,15 @@ class MAPPOTrainer:
                         avg = np.mean(reward_window) if reward_window else 0.0
                         fps = int(total_steps / max(time.time() - start_time, 1e-6))
                         if writer:
-                            writer.add_scalar("rollout/episode_return", episode_reward, total_steps)
-                            writer.add_scalar("rollout/episode_return_mean_100", avg, total_steps)
-                            writer.add_scalar("rollout/episode_length", episode_len, total_steps)
+                            writer.add_scalar(
+                                "rollout/episode_return", episode_reward, total_steps
+                            )
+                            writer.add_scalar(
+                                "rollout/episode_return_mean_100", avg, total_steps
+                            )
+                            writer.add_scalar(
+                                "rollout/episode_length", episode_len, total_steps
+                            )
                             writer.add_scalar("time/fps", fps, total_steps)
                         print(
                             f"step={total_steps:>8d} update={updates:>5d} "
@@ -325,20 +428,51 @@ class MAPPOTrainer:
                 next_value = self._bootstrap_value(global_obs, env.agents)
                 update_info = self._update(self.buffer.data(), next_value)
                 updates += 1
+
+                # Linear learning-rate annealing
+                progress = min(1.0, total_steps / cfg.total_timesteps)
+                lr = cfg.learning_rate * (1.0 - progress)
+                for pg in self.actor_optimizer.param_groups:
+                    pg["lr"] = lr
+                for pg in self.critic_optimizer.param_groups:
+                    pg["lr"] = lr
+
                 if writer and update_info:
-                    writer.add_scalar("train/actor_loss", update_info["policy_loss"], total_steps)
-                    writer.add_scalar("train/critic_loss", update_info["value_loss"], total_steps)
-                    writer.add_scalar("train/entropy", update_info["entropy"], total_steps)
+                    writer.add_scalar(
+                        "train/actor_loss", update_info["policy_loss"], total_steps
+                    )
+                    writer.add_scalar(
+                        "train/critic_loss", update_info["value_loss"], total_steps
+                    )
+                    writer.add_scalar(
+                        "train/entropy", update_info["entropy"], total_steps
+                    )
+                    writer.add_scalar("train/learning_rate", lr, total_steps)
             else:
                 update_info = {}
 
             if updates > 0 and (total_steps % cfg.eval_freq < cfg.n_steps):
-                avg_return = self.evaluate(num_episodes=cfg.n_eval_episodes)
+                eval_info = self.evaluate(num_episodes=cfg.n_eval_episodes)
                 if writer:
-                    writer.add_scalar("eval/avg_return", avg_return, total_steps)
-                self.save(os.path.join(cfg.model_dir, f"mappo_step_{total_steps}.pt"), total_steps)
+                    writer.add_scalar(
+                        "eval/avg_return", eval_info["avg_return"], total_steps
+                    )
+                    writer.add_scalar(
+                        "eval/avg_length", eval_info["avg_length"], total_steps
+                    )
+                    writer.add_scalar(
+                        "eval/avg_targets_reached",
+                        eval_info["avg_targets_reached"],
+                        total_steps,
+                    )
+                self.save(
+                    os.path.join(cfg.model_dir, f"mappo_step_{total_steps}.pt"),
+                    total_steps,
+                )
                 print(
-                    f"[eval] step={total_steps} avg_return={avg_return:.2f} "
+                    f"[eval] step={total_steps} avg_return={eval_info['avg_return']:.2f} "
+                    f"avg_length={eval_info['avg_length']:.1f} "
+                    f"targets={eval_info['avg_targets_reached']:.2f}/{self.config.env.num_targets} "
                     f"policy_loss={update_info.get('policy_loss', 0.0):.4f} "
                     f"value_loss={update_info.get('value_loss', 0.0):.4f}"
                 )
@@ -353,11 +487,16 @@ class MAPPOTrainer:
     def _bootstrap_value(self, global_obs: np.ndarray, active_agents) -> float:
         if not active_agents:
             return 0.0
-        global_tensor = torch.as_tensor(global_obs, dtype=torch.float32, device=self.device)
+        norm_global = self._normalize_global_obs(global_obs, update=False)
+        global_tensor = torch.as_tensor(
+            norm_global, dtype=torch.float32, device=self.device
+        )
         with torch.no_grad():
             return float(self.critic(global_tensor.unsqueeze(0)).item())
 
-    def _compute_returns_advantages(self, data: Dict[str, np.ndarray], next_value: float):
+    def _compute_returns_advantages(
+        self, data: Dict[str, np.ndarray], next_value: float
+    ):
         cfg = self.config.train
         n = data["rewards"].shape[0]
         values = data["values"]
@@ -383,7 +522,9 @@ class MAPPOTrainer:
 
         return returns, advantages
 
-    def _update(self, data: Dict[str, np.ndarray], next_value: float) -> Dict[str, float]:
+    def _update(
+        self, data: Dict[str, np.ndarray], next_value: float
+    ) -> Dict[str, float]:
         cfg = self.config.train
         returns, advantages = self._compute_returns_advantages(data, next_value)
 
@@ -396,15 +537,27 @@ class MAPPOTrainer:
         if mask_flat.sum() < 2:
             return {}
 
-        obs_t = torch.as_tensor(obs_flat[mask_flat], dtype=torch.float32, device=self.device)
-        act_t = torch.as_tensor(act_flat[mask_flat], dtype=torch.float32, device=self.device)
-        old_logp_t = torch.as_tensor(old_logp_flat[mask_flat], dtype=torch.float32, device=self.device)
-        adv_t = torch.as_tensor(adv_flat[mask_flat], dtype=torch.float32, device=self.device)
+        obs_t = torch.as_tensor(
+            obs_flat[mask_flat], dtype=torch.float32, device=self.device
+        )
+        act_t = torch.as_tensor(
+            act_flat[mask_flat], dtype=torch.float32, device=self.device
+        )
+        old_logp_t = torch.as_tensor(
+            old_logp_flat[mask_flat], dtype=torch.float32, device=self.device
+        )
+        adv_t = torch.as_tensor(
+            adv_flat[mask_flat], dtype=torch.float32, device=self.device
+        )
         adv_t = (adv_t - adv_t.mean()) / (adv_t.std(unbiased=False) + 1e-8)
 
-        global_t = torch.as_tensor(data["global_obs"], dtype=torch.float32, device=self.device)
+        global_t = torch.as_tensor(
+            data["global_obs"], dtype=torch.float32, device=self.device
+        )
         return_t = torch.as_tensor(returns, dtype=torch.float32, device=self.device)
-        old_value_t = torch.as_tensor(data["values"], dtype=torch.float32, device=self.device)
+        old_value_t = torch.as_tensor(
+            data["values"], dtype=torch.float32, device=self.device
+        )
 
         policy_losses = []
         value_losses = []
@@ -416,11 +569,14 @@ class MAPPOTrainer:
         for _ in range(cfg.n_epochs):
             np.random.shuffle(actor_indices)
             for start in range(0, len(actor_indices), cfg.batch_size):
-                idx = actor_indices[start:start + cfg.batch_size]
+                idx = actor_indices[start : start + cfg.batch_size]
                 new_logp, entropy = self.actor.evaluate_actions(obs_t[idx], act_t[idx])
                 ratio = (new_logp - old_logp_t[idx]).exp()
                 unclipped = ratio * adv_t[idx]
-                clipped = torch.clamp(ratio, 1.0 - cfg.clip_range, 1.0 + cfg.clip_range) * adv_t[idx]
+                clipped = (
+                    torch.clamp(ratio, 1.0 - cfg.clip_range, 1.0 + cfg.clip_range)
+                    * adv_t[idx]
+                )
                 policy_loss = -torch.min(unclipped, clipped).mean()
                 loss = policy_loss - cfg.ent_coef * entropy.mean()
 
@@ -434,13 +590,15 @@ class MAPPOTrainer:
 
             np.random.shuffle(critic_indices)
             for start in range(0, len(critic_indices), cfg.batch_size):
-                idx = critic_indices[start:start + cfg.batch_size]
+                idx = critic_indices[start : start + cfg.batch_size]
                 value = self.critic(global_t[idx])
                 value_clipped = old_value_t[idx] + torch.clamp(
                     value - old_value_t[idx], -cfg.clip_range, cfg.clip_range
                 )
                 loss_unclipped = F.mse_loss(value, return_t[idx], reduction="none")
-                loss_clipped = F.mse_loss(value_clipped, return_t[idx], reduction="none")
+                loss_clipped = F.mse_loss(
+                    value_clipped, return_t[idx], reduction="none"
+                )
                 value_loss = 0.5 * torch.max(loss_unclipped, loss_clipped).mean()
 
                 self.critic_optimizer.zero_grad(set_to_none=True)
@@ -456,14 +614,17 @@ class MAPPOTrainer:
             "entropy": float(np.mean(entropies)) if entropies else 0.0,
         }
 
-    def evaluate(self, num_episodes: int = 5) -> float:
+    def evaluate(self, num_episodes: int = 5) -> Dict[str, float]:
         env = self._make_env()
         returns = []
+        lengths = []
+        reached = []
 
         for ep in range(num_episodes):
             obs, info = env.reset(seed=self.config.train.seed + 10_000 + ep)
             done = False
             ep_return = 0.0
+            ep_len = 0
 
             while not done:
                 obs_batch = np.zeros((self.n_agents, self.obs_dim), dtype=np.float32)
@@ -471,19 +632,32 @@ class MAPPOTrainer:
                     if agent_id in env.agents:
                         obs_batch[i] = obs[agent_id]
 
-                obs_t = torch.as_tensor(obs_batch, dtype=torch.float32, device=self.device)
+                obs_t = torch.as_tensor(
+                    self._normalize_obs(obs_batch, update=False),
+                    dtype=torch.float32,
+                    device=self.device,
+                )
                 with torch.no_grad():
                     actions_t, _, _ = self.actor.sample(obs_t, deterministic=True)
                 action_arr = actions_t.cpu().numpy()
-                actions = {agent_id: action_arr[i] for i, agent_id in enumerate(self.agent_ids)}
+                actions = {
+                    agent_id: action_arr[i] for i, agent_id in enumerate(self.agent_ids)
+                }
                 obs, rewards, terms, truncs, info = env.step(actions)
                 ep_return += sum(rewards.values())
+                ep_len += 1
                 done = not env.agents
 
             returns.append(ep_return)
+            lengths.append(ep_len)
+            reached.append(int(np.sum(env.env._target_assigned)))
 
         env.close()
-        return float(np.mean(returns)) if returns else 0.0
+        return {
+            "avg_return": float(np.mean(returns)) if returns else 0.0,
+            "avg_length": float(np.mean(lengths)) if lengths else 0.0,
+            "avg_targets_reached": float(np.mean(reached)) if reached else 0.0,
+        }
 
     def save(self, path: str, step: int):
         payload = {
@@ -548,10 +722,10 @@ def parse_args():
     parser.add_argument("--num_obstacles", type=int, default=10)
     parser.add_argument("--task_mode", choices=["reach", "delivery"], default="reach")
     parser.add_argument("--aggregate_phy_steps", type=int, default=1)
-    parser.add_argument("--max_episode_steps", type=int, default=500)
+    parser.add_argument("--max_episode_steps", type=int, default=2000)
 
     parser.add_argument("--total_steps", type=int, default=500_000)
-    parser.add_argument("--rollout_steps", type=int, default=2048)
+    parser.add_argument("--rollout_steps", type=int, default=4096)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--lr", type=float, default=3e-4)
