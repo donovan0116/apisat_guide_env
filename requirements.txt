@@ -12,6 +12,7 @@ gymnasium>=0.29.0
 # RL algorithms (optional)
 # stable-baselines3>=2.1.0
 # torch>=2.0.0
+tensorboard>=2.16.0
 # Or for distributed MARL:
 # ray[rllib]>=2.0.0
 

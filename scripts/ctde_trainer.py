@@ -27,6 +27,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
 
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    SummaryWriter = None
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from envs import ParallelQuadrotorDelivery
@@ -180,6 +185,11 @@ class CTDETrainer:
 
     def train(self):
         config = self.config
+        os.makedirs(config.train.log_dir, exist_ok=True)
+        os.makedirs(config.train.model_dir, exist_ok=True)
+        writer = SummaryWriter(config.train.log_dir) if SummaryWriter else None
+        if writer is None:
+            print("[CTDE] TensorBoard unavailable. Install tensorboard to enable logging.")
         env = ParallelQuadrotorDelivery(
             num_drones=config.env.num_drones,
             num_targets=config.env.num_targets,
@@ -196,6 +206,8 @@ class CTDETrainer:
         total_steps = 0
         episode = 0
         episode_rewards = deque(maxlen=100)
+        current_episode_reward = 0.0
+        current_episode_len = 0
 
         obs_dict, info_dict = env.reset()
         global_obs = info_dict["global_obs"]
@@ -246,13 +258,20 @@ class CTDETrainer:
                 obs_dict = next_obs
                 global_obs = next_info.get("global_obs", global_obs)
                 total_steps += 1
+                current_episode_reward += float((rewards * masks).sum())
+                current_episode_len += 1
 
                 if not env.agents:
                     obs_dict, info_dict = env.reset()
                     global_obs = info_dict["global_obs"]
                     episode += 1
-                    ep_rew = sum(rewards)
-                    episode_rewards.append(ep_rew)
+                    episode_rewards.append(current_episode_reward)
+                    if writer:
+                        writer.add_scalar("rollout/episode_reward", current_episode_reward, total_steps)
+                        writer.add_scalar("rollout/episode_reward_mean_100", np.mean(episode_rewards), total_steps)
+                        writer.add_scalar("rollout/episode_length", current_episode_len, total_steps)
+                    current_episode_reward = 0.0
+                    current_episode_len = 0
                     break
 
             # -- PPO Update --
@@ -260,7 +279,11 @@ class CTDETrainer:
                 continue
 
             data = self.buffer.get_data()
-            self._update(data)
+            update_info = self._update(data)
+            if writer and update_info:
+                writer.add_scalar("train/actor_loss", update_info["actor_loss"], total_steps)
+                writer.add_scalar("train/critic_loss", update_info["critic_loss"], total_steps)
+                writer.add_scalar("train/entropy", update_info["entropy"], total_steps)
 
             # Logging
             if total_steps % 5000 == 0 and episode_rewards:
@@ -278,6 +301,8 @@ class CTDETrainer:
                     "step": total_steps,
                 }, os.path.join(ckpt_dir, f"ctde_step_{total_steps}.pt"))
 
+        if writer:
+            writer.close()
         env.close()
         print(f"[CTDE] Training complete. Final avg reward: "
               f"{np.mean(episode_rewards):.1f}" if episode_rewards else "")
@@ -326,7 +351,7 @@ class CTDETrainer:
         active = masks_flat > 0.5
         n_active = active.sum()
         if n_active < 2:
-            return
+            return {}
 
         obs_t = torch.as_tensor(obs_flat[active], device=self.device).float()
         acts_t = torch.as_tensor(acts_flat[active], device=self.device).float()
@@ -339,6 +364,9 @@ class CTDETrainer:
         # --- Actor update ---
         m = obs_t.shape[0]
         indices = np.arange(m)
+        actor_losses = []
+        critic_losses = []
+        entropies = []
 
         for _ in range(config.n_epochs):
             np.random.shuffle(indices)
@@ -351,13 +379,15 @@ class CTDETrainer:
                 surr1 = ratio * advs_t[idx]
                 surr2 = torch.clamp(ratio, 1 - config.clip_range,
                                     1 + config.clip_range) * advs_t[idx]
-                actor_loss = -torch.min(surr1, surr2).mean()
-                actor_loss = actor_loss - config.ent_coef * entropy.mean()
+                policy_loss = -torch.min(surr1, surr2).mean()
+                actor_loss = policy_loss - config.ent_coef * entropy.mean()
 
                 self.actor_optim.zero_grad()
                 actor_loss.backward()
                 nn.utils.clip_grad_norm_(self.actor.parameters(), config.max_grad_norm)
                 self.actor_optim.step()
+                actor_losses.append(float(policy_loss.item()))
+                entropies.append(float(entropy.mean().item()))
 
         # --- Critic update (per-timestep, full global state) ---
         global_t = torch.as_tensor(data["global_obs"], device=self.device).float()
@@ -379,6 +409,13 @@ class CTDETrainer:
                 critic_loss.backward()
                 nn.utils.clip_grad_norm_(self.critic.parameters(), config.max_grad_norm)
                 self.critic_optim.step()
+                critic_losses.append(float(critic_loss.item()))
+
+        return {
+            "actor_loss": float(np.mean(actor_losses)) if actor_losses else 0.0,
+            "critic_loss": float(np.mean(critic_losses)) if critic_losses else 0.0,
+            "entropy": float(np.mean(entropies)) if entropies else 0.0,
+        }
 
 
 # ============================================================
@@ -394,6 +431,8 @@ def main():
     parser.add_argument("--total_steps", type=int, default=500_000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--log_dir", type=str, default="./logs/ctde")
+    parser.add_argument("--model_dir", type=str, default="./models")
     args = parser.parse_args()
 
     config = FullConfig()
@@ -405,8 +444,8 @@ def main():
     config.train.seed = args.seed
     config.train.device = args.device
     config.train.n_steps = 2048
-
-    os.makedirs(config.train.model_dir, exist_ok=True)
+    config.train.log_dir = args.log_dir
+    config.train.model_dir = args.model_dir
 
     trainer = CTDETrainer(config)
     trainer.train()

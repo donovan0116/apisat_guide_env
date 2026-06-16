@@ -25,6 +25,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
 
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    SummaryWriter = None
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from envs import ParallelQuadrotorDelivery
@@ -212,6 +217,9 @@ class MAPPOTrainer:
         env = self._make_env()
         os.makedirs(cfg.model_dir, exist_ok=True)
         os.makedirs(cfg.log_dir, exist_ok=True)
+        writer = SummaryWriter(cfg.log_dir) if SummaryWriter else None
+        if writer is None:
+            print("[MAPPO] TensorBoard unavailable. Install tensorboard to enable logging.")
 
         obs_dict, info = env.reset(seed=cfg.seed)
         global_obs = info["global_obs"].astype(np.float32)
@@ -295,6 +303,11 @@ class MAPPOTrainer:
                     if episode_idx % cfg.n_eval_episodes == 0:
                         avg = np.mean(reward_window) if reward_window else 0.0
                         fps = int(total_steps / max(time.time() - start_time, 1e-6))
+                        if writer:
+                            writer.add_scalar("rollout/episode_return", episode_reward, total_steps)
+                            writer.add_scalar("rollout/episode_return_mean_100", avg, total_steps)
+                            writer.add_scalar("rollout/episode_length", episode_len, total_steps)
+                            writer.add_scalar("time/fps", fps, total_steps)
                         print(
                             f"step={total_steps:>8d} update={updates:>5d} "
                             f"episode={episode_idx:>5d} avg_return={avg:>9.2f} "
@@ -312,11 +325,17 @@ class MAPPOTrainer:
                 next_value = self._bootstrap_value(global_obs, env.agents)
                 update_info = self._update(self.buffer.data(), next_value)
                 updates += 1
+                if writer and update_info:
+                    writer.add_scalar("train/actor_loss", update_info["policy_loss"], total_steps)
+                    writer.add_scalar("train/critic_loss", update_info["value_loss"], total_steps)
+                    writer.add_scalar("train/entropy", update_info["entropy"], total_steps)
             else:
                 update_info = {}
 
             if updates > 0 and (total_steps % cfg.eval_freq < cfg.n_steps):
                 avg_return = self.evaluate(num_episodes=cfg.n_eval_episodes)
+                if writer:
+                    writer.add_scalar("eval/avg_return", avg_return, total_steps)
                 self.save(os.path.join(cfg.model_dir, f"mappo_step_{total_steps}.pt"), total_steps)
                 print(
                     f"[eval] step={total_steps} avg_return={avg_return:.2f} "
@@ -326,6 +345,8 @@ class MAPPOTrainer:
 
         final_path = os.path.join(cfg.model_dir, "mappo_final.pt")
         self.save(final_path, total_steps)
+        if writer:
+            writer.close()
         env.close()
         print(f"[MAPPO] complete, saved {final_path}")
 

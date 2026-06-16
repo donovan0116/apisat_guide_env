@@ -26,6 +26,11 @@ from core.termination import TerminationConfig
 from utils.config import FullConfig
 from envs import QuadrotorDeliveryEnv, ParallelQuadrotorDelivery, make_sb3_env
 
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    SummaryWriter = None
+
 
 # ============================================================
 #  Centralized PPO
@@ -154,7 +159,11 @@ def train_independent_ppo(config: FullConfig):
     obs_space = env.observation_space(agent_ids[0])
     act_space = env.action_space(agent_ids[0])
 
+    os.makedirs(config.train.log_dir, exist_ok=True)
     os.makedirs(config.train.model_dir, exist_ok=True)
+    writer = SummaryWriter(os.path.join(config.train.log_dir, "ippo")) if SummaryWriter else None
+    if writer is None:
+        print("[Independent PPO] TensorBoard unavailable. Install tensorboard to enable logging.")
 
     # --- Manual parameter-sharing training loop ---
     print(f"[Independent PPO] Training {config.train.total_timesteps} steps "
@@ -203,6 +212,10 @@ def train_independent_ppo(config: FullConfig):
     total_steps = 0
     episode = 0
     best_reward = -np.inf
+    episode_rewards = []
+    policy_losses = []
+    value_losses = []
+    entropies = []
 
     obs_dict, info_dict = env.reset()
 
@@ -248,6 +261,10 @@ def train_independent_ppo(config: FullConfig):
                 obs_dict, info_dict = env.reset()
                 episode += 1
                 total_rew = sum(rew_list[j][-1] if rew_list[j] else 0 for j in range(len(agent_ids)))
+                episode_rewards.append(total_rew)
+                if writer:
+                    writer.add_scalar("rollout/episode_reward", total_rew, total_steps)
+                    writer.add_scalar("rollout/episode_reward_mean_100", np.mean(episode_rewards[-100:]), total_steps)
                 if total_steps % 5000 == 0:
                     print(f"  Step {total_steps} | Episode {episode} | "
                           f"Reward {total_rew:.1f}")
@@ -332,6 +349,20 @@ def train_independent_ppo(config: FullConfig):
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.policy.parameters(), config.train.max_grad_norm)
                 model.policy.optimizer.step()
+                policy_losses.append(float(policy_loss.item()))
+                value_losses.append(float(value_loss.item()))
+                entropies.append(float(entropy.item()))
+
+        if writer:
+            if policy_losses:
+                writer.add_scalar("train/actor_loss", np.mean(policy_losses), total_steps)
+                writer.add_scalar("train/critic_loss", np.mean(value_losses), total_steps)
+                writer.add_scalar("train/entropy", np.mean(entropies), total_steps)
+                policy_losses.clear()
+                value_losses.clear()
+                entropies.clear()
+            if all_rews.size:
+                writer.add_scalar("rollout/reward_mean", float(all_rews.mean()), total_steps)
 
         if total_steps % 10000 == 0 or total_steps >= config.train.total_timesteps:
             ckpt_path = os.path.join(config.train.model_dir, f"ippo_step_{total_steps}")
@@ -339,6 +370,8 @@ def train_independent_ppo(config: FullConfig):
             print(f"  [Checkpoint] Saved to {ckpt_path}")
 
     model.save(os.path.join(config.train.model_dir, "ippo_final"))
+    if writer:
+        writer.close()
     env.close()
     print("[Independent PPO] Training complete.")
 
@@ -360,6 +393,8 @@ def main():
     parser.add_argument("--n_envs", type=int, default=4, help="(ppo only) Num parallel envs")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--log_dir", type=str, default="./logs")
+    parser.add_argument("--model_dir", type=str, default="./models")
     args = parser.parse_args()
 
     config = FullConfig()
@@ -372,6 +407,8 @@ def main():
     config.train.n_envs = args.n_envs
     config.train.seed = args.seed
     config.train.device = args.device
+    config.train.log_dir = args.log_dir
+    config.train.model_dir = args.model_dir
 
     # Adjust PPO n_steps for short total steps
     if config.train.total_timesteps < 10000:
