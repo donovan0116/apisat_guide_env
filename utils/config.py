@@ -24,7 +24,7 @@ class EnvConfig:
     num_obstacles: int = 10
     task_mode: str = "reach"  # "reach" | "delivery"
     bounds: Tuple = (-50, 50, -50, 50, 0, 30)  # (xmin, xmax, ymin, ymax, zmin, zmax)
-    aggregate_phy_steps: int = 1
+    aggregate_phy_steps: int = 20
     max_steps: int = 2000
 
     @property
@@ -52,8 +52,8 @@ class TrainingConfig:
     n_steps: int = 2048
     batch_size: int = 64
     n_epochs: int = 10
-    gamma: float = 0.99
-    gae_lambda: float = 0.95
+    gamma: float = 0.995
+    gae_lambda: float = 0.97
     clip_range: float = 0.2
     ent_coef: float = 0.01
     vf_coef: float = 0.5

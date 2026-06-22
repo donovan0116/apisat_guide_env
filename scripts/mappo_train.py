@@ -260,11 +260,23 @@ class MAPPOTrainer:
         self.obs_rms = RunningMeanStd((self.obs_dim,))
         self.global_obs_rms = RunningMeanStd((self.global_dim,))
 
-    def _normalize_obs(self, obs: np.ndarray, update: bool = True) -> np.ndarray:
-        """Normalize local observations using running statistics."""
+    def _normalize_obs(
+        self, obs: np.ndarray, update: bool = True, mask: np.ndarray = None
+    ) -> np.ndarray:
+        """Normalize local observations using running statistics.
+
+        When a mask is provided, only active-agent rows contribute to the
+        running statistics update.  This prevents zero-vectors from terminated
+        agents from corrupting the normalization.
+        """
         flat = obs.reshape(-1, self.obs_dim)
         if update:
-            self.obs_rms.update(flat)
+            if mask is not None:
+                active_mask = mask.reshape(-1) > 0.5
+                if active_mask.any():
+                    self.obs_rms.update(flat[active_mask])
+            else:
+                self.obs_rms.update(flat)
         norm = self.obs_rms.normalize(flat)
         return norm.reshape(obs.shape)
 
@@ -341,8 +353,8 @@ class MAPPOTrainer:
                     obs_batch[i] = obs_dict[agent_id]
                     masks[i] = 1.0
 
-                # Normalize inputs using running statistics
-                norm_obs_batch = self._normalize_obs(obs_batch)
+                # Normalize inputs using running statistics (mask excludes inactive agents)
+                norm_obs_batch = self._normalize_obs(obs_batch, mask=masks)
                 norm_global_obs = self._normalize_global_obs(global_obs)
 
                 obs_tensor = torch.as_tensor(
@@ -599,7 +611,7 @@ class MAPPOTrainer:
                 loss_clipped = F.mse_loss(
                     value_clipped, return_t[idx], reduction="none"
                 )
-                value_loss = 0.5 * torch.max(loss_unclipped, loss_clipped).mean()
+                value_loss = torch.max(loss_unclipped, loss_clipped).mean()
 
                 self.critic_optimizer.zero_grad(set_to_none=True)
                 (cfg.vf_coef * value_loss).backward()
@@ -721,16 +733,16 @@ def parse_args():
     parser.add_argument("--num_targets", type=int, default=4)
     parser.add_argument("--num_obstacles", type=int, default=10)
     parser.add_argument("--task_mode", choices=["reach", "delivery"], default="reach")
-    parser.add_argument("--aggregate_phy_steps", type=int, default=1)
-    parser.add_argument("--max_episode_steps", type=int, default=2000)
+    parser.add_argument("--aggregate_phy_steps", type=int, default=20)
+    parser.add_argument("--max_episode_steps", type=int, default=1000)
 
     parser.add_argument("--total_steps", type=int, default=500_000)
     parser.add_argument("--rollout_steps", type=int, default=4096)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--lr", type=float, default=3e-4)
-    parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--gae_lambda", type=float, default=0.95)
+    parser.add_argument("--gamma", type=float, default=0.995)
+    parser.add_argument("--gae_lambda", type=float, default=0.97)
     parser.add_argument("--clip_range", type=float, default=0.2)
     parser.add_argument("--ent_coef", type=float, default=0.01)
     parser.add_argument("--vf_coef", type=float, default=0.5)

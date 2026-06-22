@@ -70,10 +70,17 @@ python scripts/train.py --algo ippo --num_drones 4 --num_targets 4
 python scripts/ctde_trainer.py --num_drones 4 --num_targets 4 --total_steps 500000
 
 # Standalone MAPPO baseline with tanh-squashed actions
+# Key default: aggregate_phy_steps=20, gamma=0.995, gae_lambda=0.97
 python scripts/mappo_train.py --num_drones 4 --num_targets 4 --total_steps 500000
+
+# With obstacles (10 default, increase for harder scenarios)
+python scripts/mappo_train.py --num_drones 4 --num_targets 4 --num_obstacles 20
 
 # Delivery mode with more obstacles
 python scripts/ctde_trainer.py --num_drones 6 --task_mode delivery --num_obstacles 20
+
+# Override aggregate_phy_steps for finer/coarser control (default 20 = 12 Hz control rate)
+python scripts/mappo_train.py --aggregate_phy_steps 10 --max_episode_steps 4000
 ```
 
 Training writes TensorBoard logs under `logs/` and checkpoints under `models/`. SB3 trainers save `.zip` files; CTDE/MAPPO trainers save `.pt` checkpoints containing `actor` and `critic` `state_dict`s.
@@ -165,11 +172,15 @@ Target assignment is greedy nearest-neighbor at reset (`_greedy_assignment`). Ta
 
 ## Important implementation notes
 
-- The environment uses `aggregate_phy_steps` sub-stepping inside `QuadrotorDeliveryEnv.step`, applying the same action repeatedly for finer physics.
-- Reward and termination code contain hardcoded constants (e.g., success radius `2.0`, collision height heuristic `5.0`). Prefer modifying via `RewardConfig` and `TerminationConfig` where possible, but be aware these hardcoded values exist in `core/reward.py` and `core/termination.py`.
+- **Reward design** (tuned for `aggregate_phy_steps=20`): `target_reached=+500`, `completion_bonus=+1000`, `step_penalty=-0.01`, `distance_scale=2.0` (potential-based), `orientation_penalty=0.0` (disabled because quadrotors MUST tilt to move). Per-step shaping (~+0.16 for approaching target) comfortably outweighs the step penalty, so flying toward a target yields net positive per-step reward.
+- The environment uses `aggregate_phy_steps` sub-stepping inside `QuadrotorDeliveryEnv.step`, applying the same action repeatedly for finer physics. Default is now 20 (12 Hz control rate); each env step covers 20/240 ≈ 0.083 s of physics.
+- `scripts/mappo_train.py` defaults: `gamma=0.995`, `gae_lambda=0.97` (longer temporal credit horizon), `aggregate_phy_steps=20`, `rollout_steps=4096`, `max_episode_steps=2000`.
+- Episode terminates early (`terminate_when_impossible=True`) when surviving drones < remaining targets — prevents wasted steps after a drone crashes.
+- Reward and termination code contain hardcoded constants (e.g., success radius `2.0`, collision height heuristic `5.0`). Prefer modifying via `RewardConfig` and `TerminationConfig` where possible.
+- Observation normalization (`RunningMeanStd` in MAPPO) excludes inactive/terminated agents to prevent zero-vector corruption of statistics.
+- Value loss coefficient is applied via `vf_coef` only (no redundant 0.5× scaling).
 - The renderer has a monkey-patch for newer matplotlib versions to keep 3D scatter `_sizes3d` as a numpy array (`utils/rendering.py`).
 - `scripts/mappo_train.py` and `scripts/ctde_trainer.py` save raw `state_dict` checkpoints, not SB3 models. To evaluate them you must load `actor`/`critic` keys into the network classes defined in those scripts.
-- Training is currently a work in progress; the most recent commit notes that training is failing. When touching training code, run a short test (`--total_steps 1000`) before long runs.
 
 ## VS Code / debugging
 

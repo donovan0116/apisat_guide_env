@@ -10,12 +10,22 @@ from typing import Tuple
 @dataclass
 class TerminationConfig:
     """Configuration for termination conditions."""
-    max_steps: int = 500
+    max_steps: int = 2000
     target_radius: float = 2.0
     collision_radius: float = 1.0
-    out_of_bounds_kill: bool = True
-    terminate_on_collision: bool = True
+    out_of_bounds_kill: bool = (
+        False  # don't terminate on OOB — clamp position + penalize via reward
+    )
+    terminate_on_collision: bool = (
+        True  # terminate on obstacle/drone-drone collision
+    )
     terminate_on_all_done: bool = True
+    terminate_when_impossible: bool = (
+        True  # end episode when fewer surviving drones than remaining targets
+    )
+    impossible_termination_min_steps: int = (
+        100  # only trigger impossible check after this many env steps
+    )
 
 
 class TerminationChecker:
@@ -111,6 +121,21 @@ class TerminationChecker:
                     p[1] < bounds[1, 0] or p[1] > bounds[1, 1] or
                     p[2] < bounds[2, 0] or p[2] > bounds[2, 1]):
                     terminated[i] = True
+
+        # --- Check if task completion is still possible ---
+        # Only trigger after a minimum number of steps, so the agent gets
+        # enough flight experience before early termination kicks in.
+        # This prevents episodes from ending in < 10 steps just because
+        # a random policy immediately crashes one drone.
+        if (
+            config.terminate_when_impossible
+            and self._step_count >= config.impossible_termination_min_steps
+        ):
+            remaining_targets = int(np.sum(~target_assigned))
+            surviving = int(np.sum(~terminated))
+            if surviving < remaining_targets:
+                truncated[:] = True
+                return terminated, truncated, True
 
         # --- All done ---
         all_done = np.all(terminated)

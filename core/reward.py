@@ -3,11 +3,11 @@ Reward function for the multi-UAV delivery task assignment environment.
 
 Reward Components:
     1. target_reached:     positive reward when a drone reaches a target
-    2. step_penalty:       small negative reward per time step (encourages efficiency)
+    2. step_penalty:       tiny negative reward per time step (encourages efficiency)
     3. collision_penalty:  large negative reward for obstacle/drone-drone collisions
     4. energy_penalty:     penalty proportional to control effort
     5. completion_bonus:   bonus when all targets are completed
-    6. hover_bonus:        small bonus for staying near grounded state (optional)
+    6. distance_shaping:   potential-based reward for decreasing distance to target
 """
 
 import numpy as np
@@ -19,22 +19,26 @@ from typing import Dict, List
 class RewardConfig:
     """Reward function configuration.
 
-    Tuned defaults prioritize reaching targets over distance-based penalties.
-    The old defaults made the distance penalty dominate 99% of the reward
-    signal, which prevented learning.
+    Tuned for aggregate_phy_steps=20 (each env step = 20/240 s physics).
+    Per-step shaping (~2.0 * 0.08 m = +0.16) comfortably outweighs the
+    step penalty (-0.01), so approaching a target always yields net positive
+    per-step reward. Orientation penalty is disabled because quadrotors
+    MUST tilt to translate horizontally — penalizing tilt penalizes movement.
     """
 
     target_reached: float = 500.0
-    step_penalty: float = 0.05
+    step_penalty: float = 0.01  # small penalty for efficiency (was 0.05)
     obstacle_collision: float = -50.0
     drone_collision: float = -30.0
     out_of_bounds_penalty: float = -10.0
     energy_coeff: float = 0.001
     completion_bonus: float = 1000.0
     distance_scale: float = (
-        10.0  # potential-based shaping: reward *decrease* in distance
+        2.0  # potential-based shaping scaled for aggregate_phy_steps=20
     )
-    orientation_penalty: float = 0.1  # penalize non-level roll/pitch (per radian)
+    orientation_penalty: float = (
+        0.0  # disabled: quadrotors MUST tilt to move horizontally
+    )
     use_shaping: bool = True
     collision_radius: float = 1.0  # drone collision radius
     ground_penalty: bool = True  # penalty for flying too low (z < 0)
@@ -106,14 +110,16 @@ class RewardCalculator:
                     )
 
         # === Collision penalties ===
-        # Obstacle collisions
+        # Obstacle collisions (consistent with TerminationChecker: 2D + height check)
         for i in range(n_drones):
             pos_i = states[i, :3]
             for j, obs_pos in enumerate(obstacle_positions):
-                dist_to_center = np.linalg.norm(pos_i[:2] - obs_pos[:2])
-                if dist_to_center < obstacle_radii[j] + config.collision_radius:
-                    components["collision"][i] = config.obstacle_collision
-                    break
+                h_dist = np.linalg.norm(pos_i[:2] - obs_pos[:2])
+                v_dist = abs(pos_i[2] - obs_pos[2])
+                if h_dist < obstacle_radii[j] + config.collision_radius:
+                    if v_dist < 5.0:  # consistent with termination.py collision check
+                        components["collision"][i] = config.obstacle_collision
+                        break
 
         # Drone-drone collisions
         for i in range(n_drones):

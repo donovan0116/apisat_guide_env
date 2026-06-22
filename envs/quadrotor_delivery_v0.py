@@ -260,12 +260,23 @@ class QuadrotorDeliveryEnv(gym.Env):
             for i in range(self.num_drones):
                 self._states[i] = self.dynamics.step(self._states[i], raw_actions[i])
 
-        # NaN detection: mark drones with NaN state as terminated
+        # NaN detection and position clamping
         for i in range(self.num_drones):
+            # Fix NaN/Inf states
             if np.any(np.isnan(self._states[i])) or np.any(np.isinf(self._states[i])):
                 self._states[i] = self._states[i].copy()
                 self._states[i][np.isnan(self._states[i])] = 0.0
                 self._states[i][np.isinf(self._states[i])] = 0.0
+            # Clamp position to bounds (soft boundary, penalized via reward)
+            self._states[i, 0] = np.clip(
+                self._states[i, 0], self.bounds[0, 0], self.bounds[0, 1]
+            )
+            self._states[i, 1] = np.clip(
+                self._states[i, 1], self.bounds[1, 0], self.bounds[1, 1]
+            )
+            self._states[i, 2] = np.clip(
+                self._states[i, 2], self.bounds[2, 0], self.bounds[2, 1]
+            )
 
         # --- Snapshot pre-update state for event detection ---
         prev_assigned = (
