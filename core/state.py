@@ -198,3 +198,55 @@ def _normalize_obs(obs: np.ndarray, config: ObsConfig, parts: list) -> np.ndarra
 
     # Carry status already 0/1
     return np.clip(norm_obs, -1.0, 1.0)
+
+
+# ── Semantic graph builder ───────────────────────────────────────────────
+
+
+def build_semantic_graph(
+    states: np.ndarray,
+    target_positions: np.ndarray,
+    target_assignment: np.ndarray,
+    obstacle_positions: np.ndarray,
+    obstacle_radii: np.ndarray,
+    carry_status: np.ndarray = None,
+    use_llm: bool = False,
+    llm_model: str = "gpt-4o",
+    llm_api_key: str = "",
+) -> "SemanticGraph":
+    """Build a semantic interaction graph from environment state.
+
+    This is the bridge between the environment and the SemGAT-MARL framework.
+    It wraps the heuristic (or LLM) classifier to produce a SemanticGraph
+    that can be consumed by the GAT policy.
+
+    Parameters
+    ----------
+    states : (n_agents, 12) drone state vectors
+    target_positions : (n_targets, 3)
+    target_assignment : (n_agents,) int — assigned target per agent (-1 = none)
+    obstacle_positions : (n_obstacles, 3)
+    obstacle_radii : (n_obstacles,)
+    carry_status : (n_agents,) bool or None
+    use_llm : if True, attempt LLM-based classification
+    llm_model / llm_api_key : passed to LLM classifier if used
+
+    Returns
+    -------
+    SemanticGraph
+    """
+    from core.semantic import make_semantic_classifier
+
+    classifier = make_semantic_classifier(
+        use_llm=use_llm,
+        llm_model=llm_model,
+        llm_api_key=llm_api_key,
+    )
+    return classifier.classify(
+        states=states,
+        target_positions=target_positions,
+        target_assignment=target_assignment,
+        obstacle_positions=obstacle_positions,
+        obstacle_radii=obstacle_radii,
+        carry_status=carry_status,
+    )

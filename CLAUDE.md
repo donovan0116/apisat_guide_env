@@ -81,6 +81,22 @@ python scripts/ctde_trainer.py --num_drones 6 --task_mode delivery --num_obstacl
 
 # Override aggregate_phy_steps for finer/coarser control (default 20 = 12 Hz control rate)
 python scripts/mappo_train.py --aggregate_phy_steps 10 --max_episode_steps 4000
+
+# SemGAT-MARL: Phase 1 — VAE pretraining (heuristic semantic labels)
+python scripts/semgat_pretrain.py --num_drones 4 --num_targets 4 --total_steps 50000
+
+# SemGAT-MARL: Phase 1 — with a different VAE config
+python scripts/semgat_pretrain.py --latent_dim 128 --beta 0.05 --lambda_sem 2.0 --vae_epochs 300
+
+# SemGAT-MARL: Phase 2 — GAT-MAPPO training
+python scripts/semgat_train.py --num_drones 4 --num_targets 4 --total_steps 500000 \
+    --vae_checkpoint models/semgat/vae_pretrained.pt
+
+# SemGAT-MARL: Phase 2 — ablation without VAE (raw obs → GAT)
+python scripts/semgat_train.py --no_vae --num_drones 4 --num_targets 4 --total_steps 500000
+
+# SemGAT-MARL: Phase 2 — without semantic reward shaping
+python scripts/semgat_train.py --no_semantic_reward --vae_checkpoint models/semgat/vae_pretrained.pt
 ```
 
 Training writes TensorBoard logs under `logs/` and checkpoints under `models/`. SB3 trainers save `.zip` files; CTDE/MAPPO trainers save `.pt` checkpoints containing `actor` and `critic` `state_dict`s.
@@ -127,6 +143,9 @@ The environment is decomposed into small, stateless-ish modules that are compose
 - `target.py` — `Target`, `Obstacle`, and procedural generation. Delivery mode creates PICKUP/DELIVERY pairs linked by `pair_id`.
 - `reward.py` — `RewardCalculator`: target reward, collision penalties, energy penalty, distance shaping, completion bonus.
 - `termination.py` — `TerminationChecker`: max steps, target reach, collisions, out-of-bounds.
+- `semantic.py` — `HeuristicSemanticClassifier` / `LLMSemanticClassifier`: classifies agent-entity pairs into 5 relation types (No-Relation, Target, Contest, Avoid, Separate). Builds sparse semantic interaction graphs. LLM classifier is a placeholder awaiting API wiring.
+- `vae.py` — `DualHeadVAE`: variational autoencoder with a physical reconstruction head and a semantic prediction head. Pre-trained offline to produce latent z that fuses dynamics and semantics.
+- `gat_policy.py` — `SemanticGATLayer`, `GATActor`, `GATCritic`: graph attention networks with semantic relation-aware attention coefficients. Replace MLP actor/critic in the MAPPO pipeline.
 
 ### Environment and wrappers (`envs/`)
 
@@ -155,6 +174,8 @@ Training scripts construct a `FullConfig()` and override fields from CLI args.
 - `train.py` — SB3-based centralized PPO or IPPO with parameter sharing. Uses `DummyVecEnv` for PPO and a manual rollout loop for IPPO.
 - `ctde_trainer.py` — Custom MAPPO: shared actor on local obs, centralized critic on global obs, per-agent masks for inactive agents.
 - `mappo_train.py` — Self-contained MAPPO baseline with tanh-squashed Gaussian actor, clipped value updates, and periodic evaluation.
+- `semgat_pretrain.py` — Phase 1 of SemGAT-MARL: collects rollout data with random policy, builds semantic labels (heuristic or LLM), trains the Dual-Head VAE, and saves the frozen encoder.
+- `semgat_train.py` — Phase 2 of SemGAT-MARL: loads frozen VAE encoder, constructs semantic graphs at each step, trains GAT actor/critic with MAPPO, and applies semantic-aware reward shaping (paper Eq. 4).
 - `eval.py` — Loads SB3 `.zip` models or runs random policy; supports live rendering, recording, and top-down view.
 
 ### Task modes

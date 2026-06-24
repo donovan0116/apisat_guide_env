@@ -1,0 +1,407 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+% The preceding line is only needed to identify funding in the first footnote. If that is unneeded, please comment it out.
+%Template version as of 6/27/2024
+
+% \usepackage[caption=false,font=normalsize,labelfont=sf,textfont=sf]{subfig}
+\usepackage{subfig}
+\usepackage{multirow}
+\usepackage{threeparttable}
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{stfloats}
+\usepackage{booktabs}
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+\begin{document}
+
+\title{LLM-Semantic Enhanced Collaborative Navigation for Distributed Multi-UAV Systems
+% *\\{\footnotesize \textsuperscript{*}Note: Sub-titles are not captured for https://ieeexplore.ieee.org  and
+% should not be used}
+% \thanks{Identify applicable funding agency here. If none, delete this.}
+}
+
+% \author{\IEEEauthorblockN{Yue Han}
+% \IEEEauthorblockA{\textit{Artificial Intelligence Research Department} \\
+% \textit{AVIC Shenyang Aircraft Design \& Research Institute}\\
+% Shenyang, China \\
+% 0000-0002-7212-1122}
+% \and
+% \IEEEauthorblockN{Zheng Yang}
+% \IEEEauthorblockA{\textit{Administration Department} \\
+% \textit{AVIC Shenyang Aircraft Design \& Research Institute}\\
+% Shenyang, China \\
+% email address or ORCID}
+% }
+
+\maketitle
+
+\begin{abstract}
+In distributed autonomous navigation of multi-UAV systems, complex dynamic couplings among agents bring great challenges to cooperative control. Traditional deep reinforcement learning methods struggle with high-dimensional state spaces and suffer from black-box decisions, whose lack of explicit semantics further causes low human-machine trust. This paper proposes an LLM-enhanced and semantics-driven navigation framework with a physical-semantic dual-constraint mechanism. We adopt a variational autoencoder to fuse physical dynamics and task semantics for graph pruning, which reduces computational complexity. A semantic-labeled graph network is combined with multi-agent reinforcement learning to realize logic-driven interpretable decision-making. Simulation results demonstrate that our method reduces state-space complexity by about 45\% and accelerates training convergence. It achieves a mission success rate over 90\ and effectively decreases collision risks. The framework supports visualized decision chains and improves system trustworthiness, which can be applied to search and rescue, low-altitude traffic management and other practical scenarios. Future work will focus on hardware-in-the-loop tests and field deployment.
+
+\end{abstract}
+
+\begin{IEEEkeywords}
+Multi-UAV systems, Collaborative navigation, Large language models, Multi-agent reinforcement learning, Semantic graph
+\end{IEEEkeywords}
+
+\section{Introduction}
+Collaborative navigation for distributed multi-UAV systems plays an essential role in modern autonomous robotics, supporting a wide range of practical missions including search and rescue, environmental monitoring and precision agriculture. To accomplish global goals in dynamic environments, UAV agents are required to cooperate closely while maintaining collision avoidance. Multi-Agent Deep Reinforcement Learning (MADRL) has become a mainstream solution for multi-agent coordination tasks. Nevertheless, existing state-of-the-art methods still suffer from two key limitations that restrict real-world application: insufficient semantic perception for interactive modeling and poor interpretability of black-box decision policies.
+Graph Neural Networks (GNNs) are widely adopted to characterize interactions among UAVs in current MADRL frameworks. Most methods build interaction graphs purely based on low-level geometric information such as Euclidean distance and relative velocity, where fully-connected graph structures or manually set heuristic thresholds are commonly used. Such geometry-only modeling works well in simple environments, but cannot extract high-level semantic interactions in complex scenarios. A UAV is unable to differentiate a target landmark, a contested landmark and a nearby obstacle, leading to redundant graph connections, noisy training gradients and slow convergence. More importantly, the uninterpretable decision process brings potential safety risks for real UAV operations.
+To address the above issues, we propose LLM-Semantic Enhanced Collaborative Navigation, a novel framework that integrates Large Language Models (LLMs) into multi-UAV collaborative navigation. Benefiting from powerful spatial reasoning and comprehension abilities, LLMs serve as an external semantic engine to parse raw environmental states. We leverage LLMs to identify four typical semantic relations between UAVs and surrounding entities: Target, Contest, Avoid and Separate. The generated semantic relations prune useless graph edges and retain only task-relevant interactions, which greatly reduces computational complexity.
+On top of the semantic graph, we further adopt a Variational Autoencoder (VAE) for pre-training to obtain a unified latent representation z. Our multi-task VAE jointly optimizes physical state reconstruction and semantic relation fitting, so that the learned latent space z embeds both UAV kinematic characteristics and task-level semantic logic. In the inference stage, we combine Graph Attention Network (GAT) with the MAPPO algorithm to implement distributed collaborative navigation based on the semantically enhanced latent features.
+The primary contributions of this work are threefold:
+\begin{itemize}
+    \item We propose an LLM-based semantic annotation pipeline to construct sparse semantic interaction graphs. It replaces traditional geometry-driven graph building and explicitly models four practical interactive relations for multi-UAV systems.
+    \item We design a multi-task VAE to learn joint physical-semantic latent representations, which effectively fuses low-level motion features and high-level semantic information to improve feature quality for reinforcement learning.
+    \item Extensive experimental results demonstrate that our approach achieves superior performance in task success rate, convergence speed and communication efficiency compared with representative baselines. Moreover, the introduced semantic mechanism significantly improves the interpretability and reliability of multi-UAV decision-making.
+\end{itemize}
+
+\section{Related Works}
+This section reviews key research relevant to our proposed framework, organizing prior work into four main areas: multi‑agent reinforcement learning (MARL) for UAV systems, graph‑based interaction modeling, representation learning for MARL, and integration of large language models (LLMs) in autonomous systems.
+
+\subsection{MARL for UAV Navigation}
+
+Multi‑agent reinforcement learning (MARL) has become a dominant paradigm for coordinating multiple agents, including UAV teams, by enabling decentralized policies through centralized training [1], [2]. Early algorithms such as Multi‑Agent Deep Deterministic Policy Gradient (MADDPG) use actor‑critic frameworks for continuous control in cooperative and competitive domains [3]. Value decomposition methods such as Value Decomposition Networks (VDN) and QMIX have been developed to learn joint value functions that improve scalability and credit assignment in cooperative tasks [4], [5]. Policy optimization methods such as Multi‑Agent Proximal Policy Optimization (MAPPO) further enhance stability and convergence in high‑dimensional control problems [6]. Recent work explores UAV‑specific MARL frameworks for communication, sensing, and coverage control, demonstrating MARL’s capacity to handle decentralized navigation in complex aerial scenarios [7], [8].
+
+Despite these advances, many MARL approaches rely on low‑level geometric features and proximity‑based interactions rather than task‑oriented semantic relations, which can limit interpretability and scalability in dynamic environments.
+
+\subsection{Graph‑Based Interaction Modeling}
+Graph Neural Networks (GNNs) are widely used to model interaction topology among agents in MARL systems. GNN‑enhanced models allow adaptive, learned communication strategies that scale beyond fixed, fully connected architectures. Graph Convolutional Reinforcement Learning (DGN) introduced graph learning into MARL to capture agent relations implicitly through learned embeddings [9]. Graph attention mechanisms (e.g., G2ANet) further refine neighbor relevance through attention weights [10]. Other methods apply graph frameworks to large‑scale UAV swarms, encoding spatial and dynamic relations into graph structures for improved coordination and obstacle avoidance [11], [12]. GNN‑based reinforcement learning models have also been explored in drone swarm exploration tasks, enabling information aggregation and cooperation under uncertainty [13]. However, most existing graph models still derive edge connectivity from geometric or heuristic measures and lack high‑level semantic relation differentiation.
+
+\subsection{Representation Learning in MARL}
+Latent representation learning techniques—such as Variational Autoencoders (VAEs)—have been adopted to compress high‑dimensional state information into compact latent spaces, facilitating efficient policy learning. VAEs provide structured latent codes that encode essential physical and relational features [14], and variants such as $\beta$‑VAEs enhance disentanglement for more interpretable latent factors [15]. World model approaches, including Dreamer, further leverage latent representations for model‑based planning and generalization [16]. Integrating semantically informed latent representations with graph architectures remains relatively unexplored in multi‑agent autonomous navigation.
+
+\subsection{LLMs in Autonomous Systems}
+Large Language Models (LLMs) have recently been integrated into robotics to provide context‑aware reasoning and high‑level instruction guidance. Surveys show that LLMs facilitate symbolic reasoning, task planning, and perception for robotic systems by leveraging their pretrained world knowledge [17], [18]. Recent studies explore LLM‑enhanced multi‑agent frameworks that combine semantic reasoning with reinforcement learning, enabling more adaptive strategies in joint sensing, communication, and task allocation [17]. For UAV systems, role‑adaptive LLM‑driven navigation frameworks show the potential of LLMs to incorporate semantic priors into decision‑making and coordination [19]. Furthermore, resource‑aware joint communication and sensing MARL frameworks demonstrate MARL’s ability to optimize multi‑objective trade‑offs in UAV networks [20]. However, few works apply LLMs directly to construct semantic interaction relations for reinforcement learning decision graphs, leaving a gap that our framework aims to address.
+
+\subsection{Research Gap}
+Although MARL, GNN-based interaction models, latent representation learning and LLM-augmented robotics have achieved remarkable progress, three key limitations still remain. First, graph interaction structures for multi-UAV MARL mostly rely on geometric metrics rather than high-level semantic relations. Second, existing representation learning methods seldom combine task-related semantic information with physical state features to enhance policy interpretability. Third, LLM techniques deployed on autonomous agents mainly focus on planning and instruction generation, instead of building semantic graphs for reinforcement learning. Driven by these challenges, we propose the LLM-Semantic Enhanced Collaborative Navigation framework, which integrates LLM-derived semantic relations, latent representations and graph-based MARL to boost overall performance and decision interpretability.
+
+\section{Problem Formulation}
+We consider a collaborative navigation task involving a fleet of $N$ heterogeneous unmanned aerial vehicles (UAVs) operating in a dynamic, obstacle-rich 3D environment $\mathcal{E}$. The mission objective is for the UAV swarm to collectively navigate from their initial positions to a set of $M$ distinct target landmarks $\mathcal{L} = \{l_1, l_2, \dots, l_M\}$ distributed within $\mathcal{E}$. In this specific formulation, we assume a one-to-one mapping constraint where the number of UAVs equals the number of landmarks ($N = M$). Consequently, each UAV must be assigned to exactly one unique landmark, requiring the swarm to implicitly coordinate to ensure full coverage of all targets without redundant visits or collisions. Furthermore, all agents must navigate safely while avoiding both static obstacles (e.g., buildings, terrain) and dynamic obstacles present in the environment, strictly preventing inter-agent collisions during the coordination process.
+
+To formalize this sequential decision-making problem under uncertainty, we model the system as a Decentralized Partially Observable Markov Decision Process (Dec-POMDP), defined by the tuple $\langle \mathcal{S}, \mathcal{A}, \mathcal{O}, \mathcal{T}, \mathcal{R}, \gamma, N \rangle$. The global state space $\mathcal{S}$ at time step $t$ encompasses the complete kinematic states of all UAVs, the configuration of environmental entities, and the mission status, specifically expressed as:
+
+$$ s_t = \left\{ (\mathbf{p}_i, \mathbf{v}_i, \mathbf{q}_i)_{i=1}^N, \quad \{\mathbf{o}_k\}_{k \in \text{Obstacles}}, \quad \{\mathbf{l}_m\}_{m=1}^M, \quad \mathcal{C} \right\} $$
+
+where $(\mathbf{p}_i, \mathbf{v}_i, \mathbf{q}_i)$ denote the position, velocity, and orientation of UAV $i$, $\mathbf{o}_k$ represents the location of the $k$-th obstacle, $\mathbf{l}_m$ denotes the fixed coordinates of the $m$-th target landmark, and $\mathcal{C}$ indicates the completion status of each landmark. Each agent $i$ independently selects a continuous control action $a_i \in \mathcal{A}_i$ (e.g., velocity commands) at each time step, forming the joint action space $\mathcal{A} = \times_{i=1}^N \mathcal{A}_i$, with the joint action denoted as $a_t = (a_1, a_2, \dots, a_N)$. Due to limited sensor range and communication bandwidth, agents operate under partial observability; thus, UAV $i$ receives a local observation $o_t^i \in \mathcal{O}_i$ consisting of its own state and relative measurements of nearby entities within its sensing radius $R_{sense}$, formally given by:
+
+$$ o_t^i = \left\{ (\mathbf{p}_i, \mathbf{v}_i, \mathbf{q}_i), \quad \{(\Delta \mathbf{p}_j, \Delta \mathbf{v}_j)\}_{j \in \mathcal{N}_i(t)}, \quad \{(\Delta \mathbf{p}_k, \Delta \mathbf{d}_k)\}_{k \in \text{LocalObs}} \right\} $$
+
+where $\mathcal{N}_i(t)$ is the set of neighboring UAVs and the remaining terms capture local obstacles and visible landmarks. The transition function $\mathcal{T}(s_{t+1} | s_t, a_t)$ governs the evolution of the system based on physical dynamics, while the discount factor $\gamma \in [0, 1)$ determines the importance of future rewards. The reward function $\mathcal{R}$ aims to maximize a collective signal $r_t = \sum_{i=1}^N r_t^i$, where the individual reward for agent $i$ is designed to balance safety and efficiency through the expression:
+
+$$ r_t^i = -w_c \cdot \mathbb{I}(\text{collision}) - w_d \cdot d_{goal} - w_e \cdot E_{energy} $$
+
+Here, $\mathbb{I}(\text{collision})$ imposes a penalty upon collision with any obstacle or another UAV, $d_{goal}$ represents the Euclidean distance to the nearest assigned target to encourage progress, and $E_{energy}$ penalizes excessive energy consumption, with $w_c, w_d, w_e$ being weighting coefficients. Notably, this reward function focuses purely on physical metrics and does not explicitly encode high-level task assignment logic, which is addressed in the proposed methodology. The ultimate objective for each agent is to learn a decentralized stochastic policy $\pi_i(a_i | o_t^i)$ that maximizes the expected cumulative discounted return:
+
+$$ J(\pi) = \mathbb{E}_{\tau \sim \pi} \left[ \sum_{t=0}^{\infty} \gamma^t r_t \right] $$
+
+subject to the constraints of partial observability and the requirement for implicit coordination to achieve uniform landmark coverage and safe navigation.
+
+\section{Methodology}
+
+This section presents \textbf{SemGAT-MARL}, a hierarchical framework that integrates Large Language Models (LLMs) for semantic grounding, Variational Autoencoders (VAEs) for disentangled representation learning, and Graph Attention Networks (GATs) for topology-aware decision making. The core innovation lies in transforming raw geometric observations into a semantically enriched latent space, which subsequently guides the construction of dynamic interaction graphs for robust multi-agent coordination. The methodology is structured into three primary modules: (1) LLM-Guided Semantic Relation Formalization, (2) Dual-Head Variational Autoencoder for Latent Disentanglement, and (3) Topology-Aware Graph Policy Optimization.
+
+\subsection{LLM-Guided Semantic Relation Formalization}
+
+Traditional MARL approaches often rely on rigid distance-based thresholds to define agent interactions, failing to capture high-level intent or complex spatial reasoning. To overcome this limitation, we introduce an LLM-based semantic annotation module that formalizes the interaction topology into four distinct relational categories. This process effectively bridges the gap between low-level sensor data and high-level mission semantics.
+
+\subsubsection{Semantic Relation Taxonomy}
+Given a global system state $s_t$, we define a set of semantic relations $\mathcal{R}$ for any pair of entities $(u, v)$, where $u$ is the focal agent and $v$ belongs to the set of neighbors $\mathcal{N}_u$. We categorize these interactions as follows:
+\begin{itemize}
+    \item \textbf{Target ($r_{uv} = T$):} Indicates a cooperative or exclusive assignment where $v$ is a landmark designated for $u$. This relation encodes a strong attractive potential field. A landmark is considered a \textit{Target} if it is the nearest unvisited landmark within the agent's velocity vector projection and no other agent claims it as their primary target.
+    \item \textbf{Contest ($r_{uv} = C$):} Signifies a competitive scenario where multiple agents vie for the same resource $v$. This relation triggers conflict resolution mechanisms. A landmark is marked as \textit{Contest} if another agent is also approaching it with high priority, necessitating a strategic retreat or alternative selection.
+    \item \textbf{Avoid ($r_{uv} = A$):} Denotes a hazardous proximity to static or dynamic obstacles, necessitating a repulsive force vector. This applies when an obstacle intersects the agent's predicted trajectory or falls within its safety zone.
+    \item \textbf{Separate ($r_{uv} = S$):} Represents inter-agent collision avoidance requirements when another drone $v$ enters the safety zone of $u$.
+\end{itemize}
+Formally, the interaction graph at time $t$ is defined as a weighted directed graph $\mathcal{G}_t = (\mathcal{V}, \mathcal{E}_t, \mathbf{W}_t)$, where edge existence and type are determined by the relation set $\mathcal{R}$. Crucially, our formulation ensures a one-to-one mapping constraint ($N=M$), where every UAV is assigned at least one landmark (either as Target or Contest) to guarantee non-idle navigation.
+
+\subsubsection{Prompt Engineering for Semantic Inference}
+To automate the extraction of $\mathcal{R}$, we employ a carefully designed prompt template $\mathcal{P}_{struct}$ fed into a pre-trained LLM. The input context $\mathcal{X}_{ctx}$ consists of normalized geometric features (relative positions, velocities) encoded in JSON format. The prompt instructs the LLM to act as a ``Semantic Relation Identifier'' and output a structured adjacency list $\mathcal{A}_{sem}$ where edges are annotated with relation types from $\mathcal{R}$. 
+
+The LLM performs zero-shot reasoning based on qualitative judgments rather than fixed thresholds. Specifically, it evaluates the relative velocity vectors and spatial distribution to distinguish between \textit{Target} (exclusive claim) and \textit{Contest} (shared interest). If an agent has no obvious candidate, the LLM is instructed to assign the nearest available landmark as a \textit{Contest} to ensure continuous movement.
+
+Let $f_{LLM}(\cdot)$ denote the inference function of the LLM. The semantic label vector $\mathbf{y}_{sem}^{(u)}$ for agent $u$ is derived as:
+\begin{equation}
+    \mathbf{y}_{sem}^{(u)} = \text{OneHot}\left( f_{LLM}(\mathcal{P}_{struct}, \mathcal{X}_{ctx}) \right)
+\end{equation}
+where $\mathbf{y}_{sem}^{(u)} \in \{0, 1\}^{| \mathcal{N}_u | \times 5}$. The five dimensions correspond to: [No Relation, Target, Contest, Avoid, Separate]. This process effectively performs \textit{zero-shot graph pruning}, retaining only semantically significant edges while discarding irrelevant geometric noise.
+
+\subsection{Dual-Head Variational Autoencoder for Latent Disentanglement}
+
+To encode the multimodal information (geometric dynamics and semantic relations) into a compact latent representation, we propose a Dual-Head Variational Autoencoder (DH-VAE). Unlike standard VAEs that focus solely on reconstruction, our architecture explicitly enforces disentanglement between physical dynamics and semantic semantics through a multi-objective training objective.
+
+\subsubsection{Input Feature Representation}
+The input observation vector $x_t$ for each agent is constructed by concatenating self-state and relative states of all neighbors (up to a maximum $K$). The feature vector includes:
+\begin{itemize}
+    \item Self-state: Normalized position $(p_x, p_y)$ and velocity $(v_x, v_y)$.
+    \item Relative states: For each neighbor $j$, features include relative position $(\Delta p_{x,j}, \Delta p_{y,j})$, relative velocity $(\Delta v_{x,j}, \Delta v_{y,j})$, and Euclidean distance $d_j$.
+    \item Landmark features: Relative position and distance to all landmarks.
+    \item Obstacle features: Relative position and bounding box/radius information.
+\end{itemize}
+The total dimensionality of $x_t$ is $D_{in} = 4 + K \times 4 + M \times 2 + O \times 4$, where $M$ is the number of landmarks and $O$ is the number of local obstacles.
+
+\subsubsection{Encoder and Decoder Architecture}
+The encoder network $q_\phi(z | x_t)$ maps the concatenated observation vector $x_t$ to a latent distribution $q_\phi(z|x_t) = \mathcal{N}(\mu_\phi(x_t), \sigma^2_\phi(x_t))$. Using the reparameterization trick, we sample the latent vector $z_t \sim q_\phi(z|x_t)$.
+
+The decoder $p_\theta(x, y_{sem} | z_t)$ comprises two parallel branches sharing the latent code $z_t$:
+\begin{enumerate}
+    \item \textbf{Physical Reconstruction Head:} Reconstructs the raw observation vector $\hat{x}_t$ to preserve kinematic continuity.
+    \item \textbf{Semantic Prediction Head:} Predicts the semantic relation probabilities $\hat{\mathbf{y}}_{sem}$ based on the latent embedding $z_t$. The output is a softmax probability distribution over the 5 relation classes for each neighbor.
+\end{enumerate}
+Both heads utilize Multi-Layer Perceptrons (MLPs) with residual connections to ensure gradient flow and feature stability.
+
+\subsubsection{Disentangled Loss Function}
+The DH-VAE is trained by minimizing a composite loss function $\mathcal{L}_{total}$ that balances reconstruction fidelity, semantic consistency, and latent regularization:
+\begin{equation}
+    \mathcal{L}_{total} = \underbrace{\| x_t - \hat{x}_t \|_2^2}_{\mathcal{L}_{phys}} + \lambda_{sem} \underbrace{\text{CrossEntropy}(\mathbf{y}_{sem}, \hat{\mathbf{y}}_{sem})}_{\mathcal{L}_{sem}} + \beta \underbrace{D_{KL}(q_\phi(z|x_t) || \mathcal{N}(0, I))}_{\mathcal{L}_{KL}}
+\end{equation}
+where:
+\begin{itemize}
+    \item $\mathcal{L}_{phys}$ ensures the latent space retains sufficient information for trajectory prediction.
+    \item $\mathcal{L}_{sem}$ acts as a supervised signal, forcing $z_t$ to encode the semantic relations defined by the LLM. Note that $\mathbf{y}_{sem}$ is a one-hot encoded vector derived from the LLM output.
+    \item $\mathcal{L}_{KL}$ regularizes the latent distribution to a standard normal prior, preventing overfitting and ensuring smooth interpolation.
+    \item $\lambda_{sem}$ and $\beta$ are hyperparameters controlling the trade-off between semantic guidance and physical accuracy.
+\end{itemize}
+Through this optimization, the latent vector $z_t$ becomes a disentangled representation where specific dimensions correlate with physical dynamics while others encode high-level interaction semantics.
+
+\subsection{Topology-Aware Graph Policy Optimization}
+
+In the deployment phase, the pre-trained DH-VAE extracts the latent representation $z_t$, which serves as the input for a Graph Attention Network (GAT)-based policy. This module leverages the semantic structure learned during pre-training to construct a sparse, task-specific interaction graph, thereby enhancing communication efficiency and decision interpretability.
+
+\subsubsection{Semantic-Guided Graph Construction}
+Instead of using a fully connected graph or fixed distance thresholds, we dynamically construct the interaction graph $\mathcal{G}_t$ using the semantic predictions from the VAE's semantic head. Specifically, an edge $(i, j)$ exists in $\mathcal{G}_t$ if and only if the predicted relation $r_{ij} \in \{T, C, A, S\}$ is non-empty. Furthermore, edge weights $w_{ij}$ are initialized based on the confidence scores of the predicted relation types, allowing the network to prioritize critical interactions (e.g., "Target" or "Avoid") over weaker ones.
+
+\subsubsection{Graph Attention Mechanism}
+Each agent $i$ updates its hidden state $h_i^{(l)}$ at layer $l$ by aggregating information from its neighbors $\mathcal{N}_i$ via a multi-head attention mechanism:
+\begin{equation}
+    h_i^{(l+1)} = \sigma \left( \sum_{j \in \mathcal{N}_i \cup \{i\}} \alpha_{ij}^{(l)} W^{(l)} h_j^{(l)} \right)
+\end{equation}
+where the attention coefficient $\alpha_{ij}^{(l)}$ is computed as:
+\begin{equation}
+    \alpha_{ij}^{(l)} = \frac{\exp(\text{LeakyReLU}(\mathbf{a}^\top [W h_i^{(l)} \| W h_j^{(l)} \| \mathbf{r}_{ij}]))}{\sum_{k \in \mathcal{N}_i \cup \{i\}} \exp(\dots)}
+\end{equation}
+Here, $\mathbf{r}_{ij}$ represents the one-hot encoding of the semantic relation type $r_{ij}$, explicitly injecting semantic context into the attention calculation. This allows the model to assign higher attention weights to neighbors involved in critical tasks (e.g., target assignment) while suppressing noise from distant or irrelevant agents.
+
+\subsubsection{MAPPO Integration and Reward Shaping}
+The final policy $\pi_\omega(a_i | z_i, h_i)$ is optimized using the Multi-Agent Proximal Policy Optimization (MAPPO) algorithm. We adopt a centralized-critic architecture where the value function $V(s_t)$ is estimated using global state information, while the actor remains decentralized. The reward function $r_t^i$ is designed to align with the semantic objectives:
+\begin{equation}
+    r_t^i = w_T \cdot \mathbb{I}(\text{approaching Target}) - w_C \cdot \mathbb{I}(\text{collision}) - w_E \cdot E_{energy} + w_S \cdot \mathbb{I}(\text{avoiding Avoid/Separate})
+\end{equation}
+where:
+\begin{itemize}
+    \item $\mathbb{I}(\text{approaching Target})$ provides a positive reward proportional to the reduction in distance to a landmark labeled as \textit{Target}.
+    \item $\mathbb{I}(\text{collision})$ imposes a heavy penalty upon collision with any obstacle or another UAV.
+    \item $E_{energy}$ penalizes excessive energy consumption (e.g., high velocity changes).
+    \item $\mathbb{I}(\text{avoiding Avoid/Separate})$ rewards maintaining safe distances from entities labeled as \textit{Avoid} or \textit{Separate}.
+\end{itemize}
+The term $\mathbb{I}(\text{approaching Target})$ is implicitly reinforced by the graph structure constructed from the ``Target'' relations, ensuring the RL agent learns to follow the semantic guidance provided by the LLM.
+
+\subsection{Algorithmic Framework}
+
+The complete training pipeline is summarized in Algorithm~\ref{alg:training}. The process involves an offline pre-training phase for the DH-VAE followed by an online RL fine-tuning phase for the GAT-MAPPO agent.
+
+\begin{algorithm}[t]
+\caption{Training Pipeline of SemGAT-MARL}
+\label{alg:training}
+\begin{algorithmic}[1]
+\REQUIRE 
+    Environment $\mathcal{E}$, 
+    LLM model $f_{\text{LLM}}$, 
+    Hyperparameters $\{\lambda_{\text{sem}}, \beta, \eta\}$
+\ENSURE 
+    Trained policy network $\pi_\omega$
+
+\STATE Initialize VAE parameters $\phi, \theta$ and policy parameters $\omega$
+\STATE \textbf{Pre-training the VAE}
+\FOR{epoch $= 1$ to $N_{\text{pretrain}}$}
+    \STATE Sample state batch $\{s_t\}$ from replay buffer
+    \STATE Generate semantic labels $\mathbf{Y}_{\text{sem}} \leftarrow f_{\text{LLM}}(\text{Prompt}, s_t)$
+    \STATE Calculate total VAE loss $\mathcal{L}_{\text{total}}$ (Eq. 3)
+    \STATE Update $\phi, \theta$ via stochastic gradient descent
+\ENDFOR
+
+\STATE Freeze the VAE encoder and extract latent representations $Z = \{z_t\}$
+
+\STATE \textbf{Training the MARL policy}
+\FOR{episode $= 1$ to $N_{\text{RL}}$}
+    \STATE Collect trajectory $\tau$ with current policy $\pi_\omega$
+    \STATE Build interaction graph $\mathcal{G}_t$ based on semantic information
+    \STATE Compute GAT-aggregated hidden states $H_t$
+    \STATE Update policy $\pi_\omega$ and critic $V_\psi$ using the MAPPO objective
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+
+\noindent\textbf{Network Architecture Specifications:}
+\begin{itemize}
+    \item \textbf{VAE Encoder/Decoder:} Composed of three fully connected layers with dimensions $[D_{in}, 256, 128]$ for encoder and $[128, 256, D_{out}]$ for decoder, utilizing LeakyReLU activations.
+    \item \textbf{GAT Policy:} Two-layer GAT with 4 attention heads and hidden dimension 64. Input features include the latent vector $z_t$ and aggregated neighbor states.
+    \item \textbf{Optimizer:} Adam optimizer with weight decay $10^{-5}$ and learning rate $\eta = 3 \times 10^{-4}$.
+\end{itemize}
+
+This modular design ensures that the semantic knowledge acquired from the LLM is effectively transferred to the reinforcement learning agent, enabling robust navigation in complex, dynamic environments without explicit hand-crafted rules.
+
+\noindent\textbf{Network Architecture Specifications:}
+\begin{itemize}
+    \item \textbf{VAE Encoder/Decoder:} Composed of three fully connected layers with dimensions $[D_{in}, 256, 128]$ for encoder and $[128, 256, D_{out}]$ for decoder, utilizing LeakyReLU activations.
+    \item \textbf{GAT Policy:} Two-layer GAT with 4 attention heads and hidden dimension 64. Input features include the latent vector $z_t$ and aggregated neighbor states.
+    \item \textbf{Optimizer:} Adam optimizer with weight decay $10^{-5}$ and learning rate $\eta = 3 \times 10^{-4}$.
+\end{itemize}
+
+This modular design ensures that the semantic knowledge acquired from the LLM is effectively transferred to the reinforcement learning agent, enabling robust navigation in complex, dynamic environments without explicit hand-crafted rules.
+\section{Experiment}
+% \subsection{Experimental Setting}
+% % 实验环境，对比算法
+% \subsection{Comparison with Baseline Method}
+
+% % \begin{figure}[tb]
+% % 	\centering	
+% % 	\includegraphics[width =0.4 \textwidth]{./pic/10.png}
+% % 	\caption{XXXX}
+% % 	\label{c1}
+% % 	\vspace{-10pt}
+% % \end{figure}
+
+
+% \begin{figure}
+% 	\centering
+% 	\subfloat[num=10]{
+% 		\begin{minipage}[b]{0.35\textwidth}
+% 			\includegraphics[width=1\textwidth]{./pic/10.png} 
+% 		\end{minipage}
+% 	}
+%     \\
+% 	\subfloat[num=100]{
+% 		\begin{minipage}[b]{0.35\textwidth}
+% 			\includegraphics[width=1\textwidth]{./pic/100.png} 
+% 		\end{minipage}
+% 	}
+%     \\
+% 	\subfloat[num=1000]{
+% 		\begin{minipage}[b]{0.35\textwidth}
+% 			\includegraphics[width=1\textwidth]{./pic/1000.png} 
+% 		\end{minipage}
+% 	}\\
+    
+%     \begin{minipage}[b]{0.35\textwidth}
+%         \includegraphics[width=1\textwidth]{./pic/1000.png} 
+%     \end{minipage}
+	
+% 	\caption{XXXXXXXXXX}
+% 	\label{c}
+
+% \end{figure}
+
+% \subsection{Ablation Study}
+% \begin{figure}
+% 	\centering
+% 	\subfloat[num=10]{
+% 		\begin{minipage}[b]{0.25\textwidth}
+% 			\includegraphics[width=1\textwidth]{./pic/1.png} 
+% 		\end{minipage}
+% 	}
+% 	\subfloat[num=100]{
+% 		\begin{minipage}[b]{0.25\textwidth}
+% 			\includegraphics[width=1\textwidth]{./pic/2.png} 
+% 		\end{minipage}
+% 	}
+% 	\caption{XXXXXXXXXX}
+% 	\label{ab1}
+% \end{figure}
+
+% \subsubsection{team}
+% \begin{figure}
+% 	\centering
+% 	\subfloat[num=10]{
+% 		\begin{minipage}[b]{0.5\textwidth}
+% 			\includegraphics[width=1\textwidth]{./pic/e_lj.png} 
+% 		\end{minipage}
+% 	}
+%     \\
+% 	\subfloat[num=100]{
+% 		\begin{minipage}[b]{0.5\textwidth}
+% 			\includegraphics[width=1\textwidth]{./pic/e_mlj.png} 
+% 		\end{minipage}
+% 	}
+%     \\
+% 	\subfloat[num=1000]{
+% 		\begin{minipage}[b]{0.5\textwidth}
+% 			\includegraphics[width=1\textwidth]{./pic/e_per.png} 
+% 		\end{minipage}
+% 	}
+% 	\caption{XXXXXXXXXX}
+% 	\label{ab2}
+% \end{figure}
+
+
+% \subsubsection{number}
+
+% \begin{table}[]
+% \begin{tabular}{ccccccc}
+% \toprule
+% \multirow{2}{*}{scence} & \multicolumn{2}{c}{action\_error} & \multicolumn{2}{c}{velo\_error} & \multicolumn{2}{c}{trajectory\_error} \\
+% \cmidrule{2-7}
+%                         & mean            & std             & mean            & std           & mean               & std              \\
+% \midrule
+% 2                       & 0.0326          & 0.0008          & 62.44           & 8.49          & 1313.41            & 359.38           \\
+% 3                       & 0.0509          & 0.0020          & 131.64          & 36.26         & 8201.22            & 284.02           \\
+% 4                       & 0.0430          & 0.0017          & 88.06           & 11.51         & 5182.53            & 238.14 \\       
+% \bottomrule
+% \end{tabular}
+% \end{table}
+
+% \subsection{data}
+
+\section{Conlusion}
+
+
+
+
+% \begin{thebibliography}{00}
+% \bibitem{b1} G. Eason, B. Noble, and I. N. Sneddon, ``On certain integrals of Lipschitz-Hankel type involving products of Bessel functions,'' Phil. Trans. Roy. Soc. London, vol. A247, pp. 529--551, April 1955.
+% \bibitem{b2} J. Clerk Maxwell, A Treatise on Electricity and Magnetism, 3rd ed., vol. 2. Oxford: Clarendon, 1892, pp.68--73.
+% \bibitem{b3} I. S. Jacobs and C. P. Bean, ``Fine particles, thin films and exchange anisotropy,'' in Magnetism, vol. III, G. T. Rado and H. Suhl, Eds. New York: Academic, 1963, pp. 271--350.
+% \bibitem{b4} K. Elissa, ``Title of paper if known,'' unpublished.
+% \bibitem{b5} R. Nicole, ``Title of paper with only first word capitalized,'' J. Name Stand. Abbrev., in press.
+% \bibitem{b6} Y. Yorozu, M. Hirano, K. Oka, and Y. Tagawa, ``Electron spectroscopy studies on magneto-optical media and plastic substrate interface,'' IEEE Transl. J. Magn. Japan, vol. 2, pp. 740--741, August 1987 [Digests 9th Annual Conf. Magnetics Japan, p. 301, 1982].
+% \bibitem{b7} M. Young, The Technical Writer's Handbook. Mill Valley, CA: University Science, 1989.
+% \bibitem{b8} D. P. Kingma and M. Welling, ``Auto-encoding variational Bayes,'' 2013, arXiv:1312.6114. [Online]. Available: https://arxiv.org/abs/1312.6114
+% \bibitem{b9} S. Liu, ``Wi-Fi Energy Detection Testbed (12MTC),'' 2023, gitHub repository. [Online]. Available: https://github.com/liustone99/Wi-Fi-Energy-Detection-Testbed-12MTC
+% \bibitem{b10} ``Treatment episode data set: discharges (TEDS-D): concatenated, 2006 to 2009.'' U.S. Department of Health and Human Services, Substance Abuse and Mental Health Services Administration, Office of Applied Studies, August, 2013, DOI:10.3886/ICPSR30122.v2
+% \bibitem{b11} K. Eves and J. Valasek, ``Adaptive control for singularly perturbed systems examples,'' Code Ocean, Aug. 2023. [Online]. Available: https://codeocean.com/capsule/4989235/tree
+% \end{thebibliography}
+% [1] S. Gronauer and K. Diepold, “Multiagent deep reinforcement learning: A survey,” Artificial Intelligence Review, vol. 55, pp. 895–943, 2022. https://link.springer.com/article/10.1007/s10462-021-09996-w 
+% [2] J. Orr and A. Dutta, “MultiAgent Deep Reinforcement Learning for MultiRobot Applications: A Survey,” Sensors, vol. 23, no. 7, p. 3625, 2023. https://doi.org/10.3390/s23073625
+% [3] R. Lowe et al., “MultiAgent ActorCritic for Mixed CooperativeCompetitive Environments,” arXiv preprint, 2017. https://arxiv.org/abs/1706.02275 
+% [4] P. Sunehag et al., “Value decomposition networks for cooperative multiagent reinforcement learning,” arXiv preprint, 2017. https://arxiv.org/abs/1706.05296
+% [5] T. Rashid et al., “QMIX: Monotonic valuefunction factorisation for deep multiagent reinforcement learning,” arXiv preprint, 2018. https://arxiv.org/abs/1803.11485
+% [6] J. Yu et al., “The surprising effectiveness of PPO in cooperative multiagent games,” arXiv preprint, 2022. https://arxiv.org/abs/2103.01955
+% [7] C. C. Ekechi et al., “A survey on UAV control with multiagent reinforcement learning,” Drones, vol. 9, no. 7, p. 484, 2025. https://doi.org/10.3390/drones9070484
+% [8] I. Guven and M. Parlak, “JCASMARL: Joint communication and sensing UAV networks via resourceconstrained MARL,” arXiv preprint, 2026. 
+% [9] Z. Jiang et al., “Graph convolutional reinforcement learning,” arXiv preprint, 2020. https://arxiv.org/abs/1810.09202
+% [10] Z. Liu et al., “G2ANet: Graph attention network for multiagent reinforcement learning,” arXiv preprint, 2020. https://arxiv.org/abs/1911.09204 
+% [11] B. Zhao et al., “Graphbased multiagent reinforcement learning for collaborative search and tracking of multiple UAVs,” Chinese Journal of Aeronautics, vol. 38, no. 3, 2025. https://doi.org/10.1016/j.cja.2024.08.045
+% [12] J. Jiang et al., “A graphbased PPO approach in multiUAV navigation for communication coverage,” International Journal of Computers Communications & Control, 2023. https://doi.org/10.15837/ijccc.2023.6.5505 [13] “Graph diffusion network for multiagent reinforcement learning in drone swarm exploration,” Engineering Applications of Artificial Intelligence, vol. 158, 2025. https://doi.org/10.1016/j.engappai.2025.111322 
+% [14] D. P. Kingma and M. Welling, “AutoEncoding Variational Bayes,” arXiv preprint, 2014. https://arxiv.org/abs/1312.6114 
+% [15] I. Higgins et al., “betaVAE: Learning basic visual concepts with a constrained variational framework,” OpenReview, 2017. https://openreview.net/forum?id=Sy2fzU9gl 
+% [16] D. Hafner et al., “Dream to Control: Learning behaviors by latent imagination,” arXiv preprint, 2020. https://arxiv.org/abs/1912.01603 
+% [17] F. Zeng et al., “Large language models for robotics: A survey,” arXiv preprint, 2023. https://arxiv.org/abs/2311.07226 
+% [18] P. Li et al., “Large language models for multirobot systems: A survey,” arXiv preprint, 2025. https://arxiv.org/abs/2502.03814 
+% [19] Z. Wang et al., “RALLY: Roleadaptive LLMdriven yoked navigation for agentic UAV swarms,” arXiv preprint, 2025. https://arxiv.org/abs/2507.01378 
+% [20] “CFRMARL: Centralized feedbackdriven reward MARL for decentralized cooperative path planning,” Acta Astronautica, vol. 246, 2026. https://doi.org/10.1016/j.actaastro.2026.04.020
+
+
+
+
+\vspace{12pt}
+
+\end{document}
